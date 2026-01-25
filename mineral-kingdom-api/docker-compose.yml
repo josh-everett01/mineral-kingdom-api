@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: mk_postgres
+    environment:
+      POSTGRES_USER: mk
+      POSTGRES_PASSWORD: mk_dev_pw
+      POSTGRES_DB: mk
+    ports:
+      - "5432:5432"
+    volumes:
+      - mk_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mk -d mk"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    container_name: mk_api
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=mk;Username=mk;Password=mk_dev_pw
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker
+    container_name: mk_worker
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=mk;Username=mk;Password=mk_dev_pw
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  mk_pgdata:

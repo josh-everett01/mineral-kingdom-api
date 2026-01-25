@@ -1,0 +1,19 @@
+# Build results
+**/bin/
+**/obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Rider/JetBrains
+.idea/
+
+# VS Code
+.vscode/
+
+# OS noise
+.DS_Store

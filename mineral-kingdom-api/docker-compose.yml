@@ -22,10 +22,11 @@ services:
       dockerfile: Dockerfile
       target: api
     container_name: mk_api
+    env_file:
+      - .env
     environment:
-      ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
-      ConnectionStrings__Default: Host=postgres;Port=5432;Database=mk;Username=mk;Password=mk_dev_pw
+      MK_DB__HOST: postgres   # override for docker network
     ports:
       - "8080:8080"
     depends_on:
@@ -38,9 +39,10 @@ services:
       dockerfile: Dockerfile
       target: worker
     container_name: mk_worker
+    env_file:
+      - .env
     environment:
-      ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__Default: Host=postgres;Port=5432;Database=mk;Username=mk;Password=mk_dev_pw
+      MK_DB__HOST: postgres   # override for docker network
     depends_on:
       postgres:
         condition: service_healthy

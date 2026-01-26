@@ -1,4 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using MineralKingdom.Infrastructure.Configuration;
 using MineralKingdom.Infrastructure.Persistence;
 
 namespace MineralKingdom.Api;
@@ -18,9 +19,11 @@ public class Program
 
         builder.Services.AddDbContext<MineralKingdomDbContext>(options =>
         {
-            options.UseNpgsql(builder.Configuration.GetConnectionString("Default"));
+            var cs = DbConnectionFactory.BuildPostgresConnectionString(builder.Configuration);
+            options.UseNpgsql(cs);
         });
 
+        builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("MK_JWT"));
 
         var app = builder.Build();
 

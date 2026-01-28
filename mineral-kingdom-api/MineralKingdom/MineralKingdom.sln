@@ -13,6 +13,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MineralKingdom.Infrastructu
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MineralKingdom.Contracts", "MineralKingdom.Contracts\MineralKingdom.Contracts.csproj", "{7A6C7433-7A87-4437-B2FD-0436C4D079AB}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MineralKingdom.Domain.Tests", "MineralKingdom.Domain.Tests\MineralKingdom.Domain.Tests.csproj", "{4D9CE1CD-8AA9-458D-A0E1-92DC17F19141}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MineralKingdom.Api.IntegrationTests", "MineralKingdom.Api.IntegrationTests\MineralKingdom.Api.IntegrationTests.csproj", "{0978C641-206D-4719-8581-370A76BC12AD}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -39,6 +43,14 @@ Global
 		{7A6C7433-7A87-4437-B2FD-0436C4D079AB}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7A6C7433-7A87-4437-B2FD-0436C4D079AB}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7A6C7433-7A87-4437-B2FD-0436C4D079AB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4D9CE1CD-8AA9-458D-A0E1-92DC17F19141}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4D9CE1CD-8AA9-458D-A0E1-92DC17F19141}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4D9CE1CD-8AA9-458D-A0E1-92DC17F19141}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4D9CE1CD-8AA9-458D-A0E1-92DC17F19141}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0978C641-206D-4719-8581-370A76BC12AD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0978C641-206D-4719-8581-370A76BC12AD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0978C641-206D-4719-8581-370A76BC12AD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0978C641-206D-4719-8581-370A76BC12AD}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

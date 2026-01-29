@@ -1,6 +1,19 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
+using MineralKingdom.Api.Security;
 using MineralKingdom.Infrastructure.Configuration;
 using MineralKingdom.Infrastructure.Persistence;
+using MineralKingdom.Infrastructure.Persistence.Entities;
+using MineralKingdom.Infrastructure.Security;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
+
+
 
 namespace MineralKingdom.Api;
 
@@ -9,11 +22,12 @@ public class Program
     public static void Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
+        Console.WriteLine($"ENV={builder.Environment.EnvironmentName}");
+
 
         // Add services to the container.
-
         builder.Services.AddControllers();
-        // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
 
@@ -25,6 +39,92 @@ public class Program
 
         builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("MK_JWT"));
 
+        // -------------------------
+        // Auth + Email Verification
+        // -------------------------
+
+        // Password hashing (built-in)
+        builder.Services.AddScoped<PasswordHasher<User>>();
+
+        // Email sender (logs verification link for now)
+        builder.Services.AddScoped<IMKEmailSender, DevNullEmailSender>();
+
+        // Token + auth services
+        builder.Services.AddScoped<EmailVerificationTokenService>();
+        builder.Services.AddScoped<AuthService>();
+
+        // Authorization policy: unverified users cannot bid
+        builder.Services.AddAuthorization(options =>
+        {
+            options.AddPolicy(AuthorizationPolicies.EmailVerified, policy =>
+            {
+                policy.RequireAuthenticatedUser();
+                policy.AddRequirements(new EmailVerifiedRequirement());
+            });
+        });
+
+        builder.Services.AddScoped<IAuthorizationHandler, EmailVerifiedHandler>();
+
+        // Authentication:
+        // - Testing: header-based TestAuth for integration tests
+        // - Non-testing: JWT bearer (no header spoofing)
+        if (builder.Environment.IsEnvironment("Testing"))
+        {
+            builder.Services.AddAuthentication(options =>
+            {
+                options.DefaultAuthenticateScheme = TestAuthDefaults.Scheme;
+                options.DefaultChallengeScheme = TestAuthDefaults.Scheme;
+            })
+            .AddScheme<TestAuthOptions, TestAuthHandler>(TestAuthDefaults.Scheme, _ => { });
+        }
+        else
+        {
+            builder.Services.AddAuthentication(options =>
+            {
+                options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+            })
+            .AddJwtBearer(options =>
+            {
+                var jwt = builder.Configuration.GetSection("MK_JWT").Get<JwtOptions>()
+                          ?? throw new InvalidOperationException("MK_JWT config is missing.");
+
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidateAudience = true,
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+                    ValidIssuer = jwt.Issuer,
+                    ValidAudience = jwt.Audience,
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.SigningKey))
+                };
+            });
+        }
+
+        builder.Services.AddRateLimiter(options =>
+{
+    options.AddFixedWindowLimiter("auth", limiter =>
+    {
+        limiter.PermitLimit = 10;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        limiter.QueueLimit = 0;
+    });
+
+    // Make it per-IP
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+    {
+        var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(ip, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 200,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+        });
+    });
+});
+
         var app = builder.Build();
 
         // Configure the HTTP request pipeline.
@@ -34,19 +134,19 @@ public class Program
             app.UseSwaggerUI();
         }
 
-        // Only redirect to HTTPS when we actually have HTTPS configured.
-        // In Docker dev compose we run HTTP only, so this would warn.
-        if (!app.Environment.IsDevelopment())
+        if (app.Environment.IsProduction())
         {
             app.UseHttpsRedirection();
         }
 
+
+        app.UseRateLimiter();
+
+        // IMPORTANT: Authentication must come before Authorization
+        app.UseAuthentication();
         app.UseAuthorization();
 
-
         app.MapControllers();
-
         app.Run();
     }
 }
-

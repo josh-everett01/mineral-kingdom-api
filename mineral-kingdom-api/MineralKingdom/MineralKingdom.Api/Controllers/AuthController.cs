@@ -2,6 +2,10 @@ using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using MineralKingdom.Infrastructure.Security;
+using Microsoft.AspNetCore.Authorization;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+
 
 namespace MineralKingdom.Api.Controllers;
 
@@ -29,7 +33,6 @@ public sealed class AuthController : ControllerBase
     string NextStep,
     string? VerificationToken
 );
-
 
   [HttpPost("register")]
   [EnableRateLimiting("auth")]
@@ -110,17 +113,117 @@ public sealed class AuthController : ControllerBase
 
   [HttpPost("resend-verification")]
   [EnableRateLimiting("auth")]
-  public async Task<ActionResult<ResendVerificationResponse>> ResendVerification([FromBody] ResendVerificationRequest req, CancellationToken ct)
+  public async Task<ActionResult<ResendVerificationResponse>> ResendVerification(
+  [FromBody] ResendVerificationRequest req,
+  CancellationToken ct)
   {
     if (string.IsNullOrWhiteSpace(req.Email))
-    {
       return BadRequest(new { error = "INVALID_INPUT" });
+
+    try
+    {
+      // Option A: Link goes to Next.js verify page
+      var publicUrl = _config["MK_APP:PUBLIC_URL"]?.TrimEnd('/');
+      if (string.IsNullOrWhiteSpace(publicUrl))
+      {
+        // safe fallback for local dev if you haven't set it yet
+        publicUrl = $"{Request.Scheme}://{Request.Host}";
+      }
+
+      var verificationBaseUrl = $"{publicUrl}/verify-email";
+
+      var (sent, rawToken) = await _auth.ResendVerificationAsync(
+        req.Email.Trim(),
+        verificationBaseUrl,
+        DateTime.UtcNow,
+        ct);
+
+      // Only return raw token in Dev/Testing to support automated tests / local debug
+      var includeToken = _env.IsEnvironment("Testing") || _env.IsDevelopment();
+
+      // NOTE: AuthService already returns (sent: true, rawToken: null) for:
+      // - user not found
+      // - user already verified
+      // This prevents email enumeration.
+      return Ok(new ResendVerificationResponse(sent, includeToken ? rawToken : null));
+    }
+    catch
+    {
+      return StatusCode(500, new { error = "RESEND_FAILED" });
+    }
+  }
+
+  public sealed record LoginRequest(string Email, string Password);
+
+  [HttpPost("login")]
+  [EnableRateLimiting("auth")]
+  public async Task<ActionResult<AuthService.AuthTokensResponse>> Login([FromBody] LoginRequest req, CancellationToken ct)
+  {
+    if (string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Password))
+      return BadRequest(new { error = "INVALID_INPUT" });
+
+    try
+    {
+      var tokens = await _auth.LoginAsync(req.Email, req.Password, DateTime.UtcNow, ct);
+      return Ok(tokens);
+    }
+    catch (InvalidOperationException ex) when (ex.Message == "INVALID_CREDENTIALS")
+    {
+      return Unauthorized(new { error = "INVALID_CREDENTIALS" });
+    }
+    catch (InvalidOperationException ex) when (ex.Message == "EMAIL_NOT_VERIFIED")
+    {
+      return StatusCode(403, new { error = "EMAIL_NOT_VERIFIED" });
+    }
+  }
+
+  public sealed record RefreshRequest(string RefreshToken);
+
+  [HttpPost("refresh")]
+  [EnableRateLimiting("auth")]
+  public async Task<ActionResult<AuthService.AuthTokensResponse>> Refresh([FromBody] RefreshRequest req, CancellationToken ct)
+  {
+    if (string.IsNullOrWhiteSpace(req.RefreshToken))
+      return BadRequest(new { error = "INVALID_INPUT" });
+
+    var result = await _auth.RefreshAsync(req.RefreshToken, DateTime.UtcNow, ct);
+
+    if (!result.Ok)
+    {
+      return result.ErrorCode switch
+      {
+        "REFRESH_TOKEN_REUSED" => Unauthorized(new { error = "REFRESH_TOKEN_REUSED" }),
+        "INVALID_OR_EXPIRED_REFRESH_TOKEN" => Unauthorized(new { error = "INVALID_OR_EXPIRED_REFRESH_TOKEN" }),
+        "INVALID_INPUT" => BadRequest(new { error = "INVALID_INPUT" }),
+        "EMAIL_NOT_VERIFIED" => StatusCode(403, new { error = "EMAIL_NOT_VERIFIED" }),
+        _ => Unauthorized(new { error = "INVALID_OR_EXPIRED_REFRESH_TOKEN" }),
+      };
     }
 
-    var verificationBaseUrl = HttpContext.Request.Scheme + "://" + HttpContext.Request.Host + "/verify-email";
-    var (sent, rawToken) = await _auth.ResendVerificationAsync(req.Email, verificationBaseUrl, DateTime.UtcNow, ct);
+    return Ok(result.Tokens);
+  }
 
-    var includeToken = _env.IsEnvironment("Testing") || _env.IsDevelopment();
-    return Ok(new ResendVerificationResponse(sent, includeToken ? rawToken : null));
+  [HttpGet("me")]
+  [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+  public ActionResult GetMe()
+  {
+    var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+                ?? User.FindFirstValue("sub");
+
+    var email = User.FindFirstValue(ClaimTypes.Email)
+              ?? User.FindFirstValue("email");
+
+    var emailVerifiedRaw = User.FindFirstValue("email_verified");
+    var emailVerified = string.Equals(emailVerifiedRaw, "true", StringComparison.OrdinalIgnoreCase);
+
+    if (string.IsNullOrWhiteSpace(userId))
+      return Unauthorized(new { error = "MISSING_SUB_CLAIM" });
+
+    return Ok(new
+    {
+      userId,
+      email,
+      emailVerified
+    });
   }
 }

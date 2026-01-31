@@ -50,8 +50,13 @@ public class Program
         builder.Services.AddScoped<IMKEmailSender, DevNullEmailSender>();
 
         // Token + auth services
-        builder.Services.AddScoped<EmailVerificationTokenService>();
         builder.Services.AddScoped<AuthService>();
+        builder.Services.AddScoped<EmailVerificationTokenService>();
+        builder.Services.AddScoped<JwtTokenService>();
+        builder.Services.AddScoped<RefreshTokenService>();
+
+
+
 
         // Authorization policy: unverified users cannot bid
         builder.Services.AddAuthorization(options =>
@@ -66,16 +71,34 @@ public class Program
         builder.Services.AddScoped<IAuthorizationHandler, EmailVerifiedHandler>();
 
         // Authentication:
-        // - Testing: header-based TestAuth for integration tests
+        // - Testing: register BOTH TestAuth (default) + JwtBearer (so specific endpoints can force Bearer)
         // - Non-testing: JWT bearer (no header spoofing)
         if (builder.Environment.IsEnvironment("Testing"))
         {
             builder.Services.AddAuthentication(options =>
             {
+                // Keep TestAuth as default so S1-1 bid tests still work
                 options.DefaultAuthenticateScheme = TestAuthDefaults.Scheme;
                 options.DefaultChallengeScheme = TestAuthDefaults.Scheme;
             })
-            .AddScheme<TestAuthOptions, TestAuthHandler>(TestAuthDefaults.Scheme, _ => { });
+            .AddScheme<TestAuthOptions, TestAuthHandler>(TestAuthDefaults.Scheme, _ => { })
+            .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
+            {
+                var jwt = builder.Configuration.GetSection("MK_JWT").Get<JwtOptions>()
+                          ?? throw new InvalidOperationException("MK_JWT config is missing.");
+
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidateAudience = true,
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+                    ValidIssuer = jwt.Issuer,
+                    ValidAudience = jwt.Audience,
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.SigningKey)),
+                    ClockSkew = TimeSpan.FromSeconds(30),
+                };
+            });
         }
         else
         {
@@ -97,10 +120,12 @@ public class Program
                     ValidateIssuerSigningKey = true,
                     ValidIssuer = jwt.Issuer,
                     ValidAudience = jwt.Audience,
-                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.SigningKey))
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.SigningKey)),
+                    ClockSkew = TimeSpan.FromSeconds(30),
                 };
             });
         }
+
 
         builder.Services.AddRateLimiter(options =>
 {

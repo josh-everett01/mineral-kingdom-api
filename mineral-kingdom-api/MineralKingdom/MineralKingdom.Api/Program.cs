@@ -54,10 +54,8 @@ public class Program
         builder.Services.AddScoped<EmailVerificationTokenService>();
         builder.Services.AddScoped<JwtTokenService>();
         builder.Services.AddScoped<RefreshTokenService>();
-
-
-
-
+        builder.Services.AddScoped<IAuditLogger, AuditLogger>();
+        // -------------------------
         // Authorization policy: unverified users cannot bid
         builder.Services.AddAuthorization(options =>
         {

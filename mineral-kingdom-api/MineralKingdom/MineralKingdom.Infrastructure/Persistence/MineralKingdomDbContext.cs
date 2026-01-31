@@ -89,18 +89,22 @@ public class MineralKingdomDbContext : DbContext
             .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<AdminAuditLog>(b =>
+        modelBuilder.Entity<AdminAuditLog>(e =>
         {
-            b.ToTable("admin_audit_logs");
-            b.HasKey(x => x.Id);
-            b.HasIndex(x => x.ActorUserId);
-            b.HasIndex(x => x.TargetUserId);
+            e.ToTable("admin_audit_logs");
+            e.HasKey(x => x.Id);
 
-            b.Property(x => x.Action).IsRequired();
-            b.Property(x => x.BeforeRole).IsRequired();
-            b.Property(x => x.AfterRole).IsRequired();
-            b.Property(x => x.CreatedAt).IsRequired();
+            e.Property(x => x.ActionType).HasMaxLength(100).IsRequired();
+            e.Property(x => x.EntityType).HasMaxLength(50).IsRequired();
+            e.Property(x => x.ActorRole).HasMaxLength(20);
+
+            e.Property(x => x.IpAddress).HasMaxLength(64);
+
+            e.Property(x => x.BeforeJson).HasColumnType("jsonb");
+            e.Property(x => x.AfterJson).HasColumnType("jsonb");
+
+            e.HasIndex(x => x.ActorUserId);
+            e.HasIndex(x => new { x.EntityType, x.EntityId });
         });
-
     }
 }

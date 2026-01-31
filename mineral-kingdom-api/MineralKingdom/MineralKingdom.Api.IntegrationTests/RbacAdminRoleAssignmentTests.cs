@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -91,13 +92,30 @@ public sealed class RbacAdminRoleAssignmentTests
     var updated = await db.Users.SingleAsync(x => x.Id == user.Id);
     updated.Role.Should().Be(UserRoles.Staff);
 
-    var audit = await db.AdminAuditLogs.OrderByDescending(x => x.CreatedAt).FirstOrDefaultAsync();
+    var audit = await db.AdminAuditLogs
+      .OrderByDescending(x => x.CreatedAt)
+      .FirstOrDefaultAsync();
+
     audit.Should().NotBeNull();
     audit!.ActorUserId.Should().Be(owner.Id);
-    audit.TargetUserId.Should().Be(user.Id);
-    audit.BeforeRole.Should().Be(UserRoles.User);
-    audit.AfterRole.Should().Be(UserRoles.Staff);
+    audit.ActorRole.Should().Be(UserRoles.Owner);
+
+    audit.ActionType.Should().Be("USER_ROLE_CHANGED");
+    audit.EntityType.Should().Be("USER");
+    audit.EntityId.Should().Be(user.Id);
+
+    audit.BeforeJson.Should().NotBeNull();
+    audit.AfterJson.Should().NotBeNull();
+
+    var beforeDoc = JsonDocument.Parse(audit.BeforeJson!);
+    beforeDoc.RootElement.GetProperty("role").GetString().Should().Be(UserRoles.User);
+
+    var afterDoc = JsonDocument.Parse(audit.AfterJson!);
+    afterDoc.RootElement.GetProperty("role").GetString().Should().Be(UserRoles.Staff);
+
+    audit.CreatedAt.Should().BeAfter(DateTimeOffset.UtcNow.AddMinutes(-5));
   }
+
 
   [Fact]
   public async Task Owner_cannot_demote_self_from_owner()

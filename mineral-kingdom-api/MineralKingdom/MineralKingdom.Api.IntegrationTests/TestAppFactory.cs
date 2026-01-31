@@ -5,6 +5,10 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MineralKingdom.Infrastructure.Persistence;
+using Microsoft.AspNetCore.Authorization;
+using MineralKingdom.Api.Security;
+using MineralKingdom.Contracts.Auth;
+
 
 namespace MineralKingdom.Api.IntegrationTests;
 
@@ -60,14 +64,45 @@ public sealed class TestAppFactory : WebApplicationFactory<MineralKingdom.Api.Pr
       logging.SetMinimumLevel(LogLevel.Debug);
     });
 
-    // ✅ This is the important part:
     builder.ConfigureServices(services =>
+{
+  // Ensure policies exist in the test host (defensive)
+  services.PostConfigure<AuthorizationOptions>(options =>
+  {
+    if (options.GetPolicy(AuthorizationPolicies.AdminAccess) is null)
     {
-      using var sp = services.BuildServiceProvider();
-      using var scope = sp.CreateScope();
+      options.AddPolicy(AuthorizationPolicies.AdminAccess, policy =>
+      {
+        policy.RequireAuthenticatedUser();
+        policy.RequireRole(UserRoles.Staff, UserRoles.Owner);
+      });
+    }
 
-      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
-      db.Database.Migrate();
-    });
+    if (options.GetPolicy(AuthorizationPolicies.OwnerOnly) is null)
+    {
+      options.AddPolicy(AuthorizationPolicies.OwnerOnly, policy =>
+      {
+        policy.RequireAuthenticatedUser();
+        policy.RequireRole(UserRoles.Owner);
+      });
+    }
+
+    if (options.GetPolicy(AuthorizationPolicies.EmailVerified) is null)
+    {
+      options.AddPolicy(AuthorizationPolicies.EmailVerified, policy =>
+      {
+        policy.RequireAuthenticatedUser();
+        policy.AddRequirements(new EmailVerifiedRequirement());
+      });
+    }
+  });
+
+  using var sp = services.BuildServiceProvider();
+  using var scope = sp.CreateScope();
+
+  var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+  db.Database.Migrate();
+});
+
   }
 }

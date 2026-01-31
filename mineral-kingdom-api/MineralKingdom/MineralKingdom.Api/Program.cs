@@ -12,6 +12,7 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Primitives;
 
 
 
@@ -55,6 +56,10 @@ public class Program
         builder.Services.AddScoped<JwtTokenService>();
         builder.Services.AddScoped<RefreshTokenService>();
         builder.Services.AddScoped<IAuditLogger, AuditLogger>();
+        builder.Services.AddScoped<PasswordResetTokenService>();
+        builder.Services.AddScoped<PasswordResetService>();
+
+
         // -------------------------
         // Authorization policy: unverified users cannot bid
         builder.Services.AddAuthorization(options =>
@@ -127,15 +132,46 @@ public class Program
 
         builder.Services.AddRateLimiter(options =>
 {
-    options.AddFixedWindowLimiter("auth", limiter =>
+    static string GetPartitionKey(HttpContext context, IWebHostEnvironment env)
     {
-        limiter.PermitLimit = 10;
-        limiter.Window = TimeSpan.FromMinutes(1);
-        limiter.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-        limiter.QueueLimit = 0;
+        // ✅ Testing-only override to prevent test collisions (DO NOT enable for prod)
+        if (env.IsEnvironment("Testing") &&
+            context.Request.Headers.TryGetValue("X-Test-RateLimit-Key", out StringValues key) &&
+            !StringValues.IsNullOrEmpty(key))
+        {
+            return key.ToString();
+        }
+
+        return context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    }
+
+    // Auth endpoints (login/register/verify/resend/reset)
+    options.AddPolicy("auth", context =>
+    {
+        var key = GetPartitionKey(context, context.RequestServices.GetRequiredService<IWebHostEnvironment>());
+        return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromMinutes(1),
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+            QueueLimit = 0
+        });
     });
 
-    // Make it per-IP
+    // Support submissions (stricter)
+    options.AddPolicy("support", context =>
+    {
+        var key = GetPartitionKey(context, context.RequestServices.GetRequiredService<IWebHostEnvironment>());
+        return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 5,
+            Window = TimeSpan.FromMinutes(1),
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+            QueueLimit = 0
+        });
+    });
+
+    // Keep your global limiter (good belt-and-suspenders)
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
     {
         var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";

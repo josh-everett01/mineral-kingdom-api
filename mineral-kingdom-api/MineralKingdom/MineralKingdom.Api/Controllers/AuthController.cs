@@ -16,12 +16,14 @@ public sealed class AuthController : ControllerBase
   private readonly AuthService _auth;
   private readonly IWebHostEnvironment _env;
   private readonly IConfiguration _config;
+  private readonly PasswordResetService _passwordReset;
 
-  public AuthController(AuthService auth, IWebHostEnvironment env, IConfiguration config)
+  public AuthController(AuthService auth, IWebHostEnvironment env, IConfiguration config, PasswordResetService passwordReset)
   {
     _auth = auth;
     _env = env;
     _config = config;
+    _passwordReset = passwordReset;
   }
 
   public sealed record RegisterRequest(string Email, string Password);
@@ -226,4 +228,63 @@ public sealed class AuthController : ControllerBase
       emailVerified
     });
   }
+
+  public sealed record PasswordResetRequest(string Email);
+  public sealed record PasswordResetRequestResponse(bool Sent, string? ResetToken);
+
+  [HttpPost("password-reset/request")]
+  [EnableRateLimiting("auth")]
+  public async Task<ActionResult<PasswordResetRequestResponse>> RequestPasswordReset(
+    [FromBody] PasswordResetRequest req,
+    CancellationToken ct)
+  {
+    if (string.IsNullOrWhiteSpace(req.Email))
+      return BadRequest(new { error = "INVALID_INPUT" });
+
+    var publicUrl = _config["MK_APP:PUBLIC_URL"]?.TrimEnd('/');
+    if (string.IsNullOrWhiteSpace(publicUrl))
+      publicUrl = $"{Request.Scheme}://{Request.Host}";
+
+    // Option A (consistent with verification): frontend page handles token
+    var resetBaseUrl = $"{publicUrl}/reset-password";
+
+    var (sent, raw) = await _passwordReset.RequestAsync(req.Email, resetBaseUrl, DateTime.UtcNow, ct);
+
+    var includeToken = _env.IsEnvironment("Testing") || _env.IsDevelopment();
+    return Ok(new PasswordResetRequestResponse(sent, includeToken ? raw : null));
+  }
+
+  public sealed record PasswordResetConfirmRequest(string Token, string NewPassword);
+
+  [HttpPost("password-reset/confirm")]
+  [EnableRateLimiting("auth")]
+  public async Task<ActionResult> ConfirmPasswordReset(
+    [FromBody] PasswordResetConfirmRequest req,
+    CancellationToken ct)
+  {
+    if (string.IsNullOrWhiteSpace(req.Token) || string.IsNullOrWhiteSpace(req.NewPassword))
+      return BadRequest(new { error = "INVALID_INPUT" });
+
+    try
+    {
+      var (ok, error) = await _passwordReset.ConfirmAsync(req.Token, req.NewPassword, DateTime.UtcNow, ct);
+
+      if (!ok)
+      {
+        return error switch
+        {
+          "INVALID_OR_EXPIRED_TOKEN" => BadRequest(new { error = "INVALID_OR_EXPIRED_TOKEN" }),
+          "INVALID_INPUT" => BadRequest(new { error = "INVALID_INPUT" }),
+          _ => BadRequest(new { error = "INVALID_OR_EXPIRED_TOKEN" })
+        };
+      }
+
+      return NoContent();
+    }
+    catch (ValidationException ex)
+    {
+      return BadRequest(new { error = "WEAK_PASSWORD", message = ex.Message });
+    }
+  }
+
 }

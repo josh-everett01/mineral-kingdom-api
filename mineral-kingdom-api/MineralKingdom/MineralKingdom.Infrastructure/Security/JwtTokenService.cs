@@ -39,6 +39,7 @@ public sealed class JwtTokenService
       new(JwtRegisteredClaimNames.Email, user.Email),
       new("email_verified", user.EmailVerified ? "true" : "false"),
       new(JwtRegisteredClaimNames.Iat, EpochTime.GetIntDate(utcNow).ToString(), ClaimValueTypes.Integer64),
+      new(ClaimTypes.Role, user.Role),
     };
 
     var expires = utcNow.Add(AccessTokenLifetime);

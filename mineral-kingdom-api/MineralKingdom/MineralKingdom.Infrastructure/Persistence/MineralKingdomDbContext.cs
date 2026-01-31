@@ -1,5 +1,6 @@
 ﻿using System.Net.NetworkInformation;
 using Microsoft.EntityFrameworkCore;
+using MineralKingdom.Contracts.Auth;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 
 namespace MineralKingdom.Infrastructure.Persistence;
@@ -15,6 +16,8 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<User> Users => Set<User>();
     public DbSet<EmailVerificationToken> EmailVerificationTokens => Set<EmailVerificationToken>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<AdminAuditLog> AdminAuditLogs => Set<AdminAuditLog>();
+
 
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -39,6 +42,11 @@ public class MineralKingdomDbContext : DbContext
             b.Property(x => x.EmailVerified).HasDefaultValue(false);
             b.Property(x => x.CreatedAt).IsRequired();
             b.Property(x => x.UpdatedAt).IsRequired();
+            b.Property(x => x.Role)
+            .IsRequired()
+            .HasMaxLength(20)
+            .HasDefaultValue(UserRoles.User);
+
         });
 
         modelBuilder.Entity<EmailVerificationToken>(b =>
@@ -80,5 +88,19 @@ public class MineralKingdomDbContext : DbContext
             .HasForeignKey(x => x.UserId)
             .OnDelete(DeleteBehavior.Cascade);
         });
+
+        modelBuilder.Entity<AdminAuditLog>(b =>
+        {
+            b.ToTable("admin_audit_logs");
+            b.HasKey(x => x.Id);
+            b.HasIndex(x => x.ActorUserId);
+            b.HasIndex(x => x.TargetUserId);
+
+            b.Property(x => x.Action).IsRequired();
+            b.Property(x => x.BeforeRole).IsRequired();
+            b.Property(x => x.AfterRole).IsRequired();
+            b.Property(x => x.CreatedAt).IsRequired();
+        });
+
     }
 }

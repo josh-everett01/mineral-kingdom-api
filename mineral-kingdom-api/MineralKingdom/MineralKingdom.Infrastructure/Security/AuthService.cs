@@ -3,6 +3,7 @@ using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using Microsoft.AspNetCore.Identity;
 using System.ComponentModel.DataAnnotations;
+using MineralKingdom.Contracts.Auth;
 
 namespace MineralKingdom.Infrastructure.Security;
 
@@ -53,6 +54,7 @@ public sealed class AuthService
       EmailVerified = false,
       CreatedAt = utcNow,
       UpdatedAt = utcNow,
+      Role = UserRoles.User
     };
 
     user.PasswordHash = _passwordHasher.HashPassword(user, password);

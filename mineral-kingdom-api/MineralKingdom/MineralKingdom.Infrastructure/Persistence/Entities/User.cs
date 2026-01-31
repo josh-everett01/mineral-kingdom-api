@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using MineralKingdom.Contracts.Auth;
 
 namespace MineralKingdom.Infrastructure.Persistence.Entities;
 
@@ -13,6 +14,9 @@ public sealed class User
   public string PasswordHash { get; set; } = string.Empty;
 
   public bool EmailVerified { get; set; }
+
+  [MaxLength(20)]
+  public string Role { get; set; } = UserRoles.User;
 
   public DateTime CreatedAt { get; set; }
 

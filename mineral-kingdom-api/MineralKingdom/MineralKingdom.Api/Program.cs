@@ -12,6 +12,7 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
+using MineralKingdom.Contracts.Auth;
 
 
 
@@ -38,6 +39,11 @@ public class Program
         });
 
         builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("MK_JWT"));
+        var jwt = builder.Configuration.GetSection("MK_JWT").Get<JwtOptions>();
+        Console.WriteLine($"MK_JWT loaded? {jwt is not null}");
+        Console.WriteLine($"MK_JWT Issuer: {jwt?.Issuer}");
+        Console.WriteLine($"MK_JWT Audience: {jwt?.Audience}");
+        Console.WriteLine($"MK_JWT SigningKey length: {jwt?.SigningKey?.Length ?? 0}");
 
         // -------------------------
         // Auth + Email Verification
@@ -65,6 +71,18 @@ public class Program
             {
                 policy.RequireAuthenticatedUser();
                 policy.AddRequirements(new EmailVerifiedRequirement());
+            });
+
+            options.AddPolicy(AuthorizationPolicies.AdminAccess, policy =>
+            {
+                policy.RequireAuthenticatedUser();
+                policy.RequireRole(UserRoles.Staff, UserRoles.Owner);
+            });
+
+            options.AddPolicy(AuthorizationPolicies.OwnerOnly, policy =>
+            {
+                policy.RequireAuthenticatedUser();
+                policy.RequireRole(UserRoles.Owner);
             });
         });
 

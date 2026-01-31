@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+using System;
 
 namespace MineralKingdom.Infrastructure.Persistence.Entities;
 
@@ -7,16 +7,18 @@ public sealed class AdminAuditLog
   public Guid Id { get; set; }
 
   public Guid ActorUserId { get; set; }
-  public Guid TargetUserId { get; set; }
+  public string? ActorRole { get; set; }
 
-  [MaxLength(100)]
-  public string Action { get; set; } = "ROLE_CHANGED";
+  public string ActionType { get; set; } = default!;
 
-  [MaxLength(20)]
-  public string BeforeRole { get; set; } = string.Empty;
+  public string EntityType { get; set; } = default!;
+  public Guid EntityId { get; set; }
 
-  [MaxLength(20)]
-  public string AfterRole { get; set; } = string.Empty;
+  public string? BeforeJson { get; set; }
+  public string? AfterJson { get; set; }
 
-  public DateTime CreatedAt { get; set; }
+  public string? IpAddress { get; set; }
+  public string? UserAgent { get; set; }
+
+  public DateTimeOffset CreatedAt { get; set; }
 }

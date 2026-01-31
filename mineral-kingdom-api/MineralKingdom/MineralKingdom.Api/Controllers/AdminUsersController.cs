@@ -6,6 +6,7 @@ using MineralKingdom.Api.Security;
 using MineralKingdom.Contracts.Auth;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
+using MineralKingdom.Infrastructure.Security;
 
 namespace MineralKingdom.Api.Controllers;
 
@@ -16,7 +17,13 @@ public sealed class AdminUsersController : ControllerBase
 {
   private readonly MineralKingdomDbContext _db;
 
-  public AdminUsersController(MineralKingdomDbContext db) => _db = db;
+  private readonly IAuditLogger _audit;
+
+  public AdminUsersController(MineralKingdomDbContext db, IAuditLogger audit)
+  {
+    _db = db;
+    _audit = audit;
+  }
 
   public sealed record AdminUserResponse(Guid Id, string Email, bool EmailVerified, string Role);
 
@@ -47,6 +54,13 @@ public sealed class AdminUsersController : ControllerBase
     if (!actorExists)
       return Unauthorized(new { error = "ACTOR_NOT_FOUND" });
 
+    var actorRole =
+      User.FindFirstValue(ClaimTypes.Role) ??
+      User.FindFirstValue("role"); // defensive
+
+    var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+    var userAgent = Request.Headers.UserAgent.ToString();
+
     await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
     var target = await _db.Users.SingleOrDefaultAsync(x => x.Id == userId, ct);
@@ -69,9 +83,7 @@ public sealed class AdminUsersController : ControllerBase
     {
       var owners = await _db.Users.CountAsync(x => x.Role == UserRoles.Owner, ct);
       if (owners <= 1)
-      {
         return Conflict(new { error = "LAST_OWNER_CANNOT_BE_REMOVED" });
-      }
     }
 
     if (string.Equals(before, normalizedNewRole, StringComparison.OrdinalIgnoreCase))
@@ -80,20 +92,26 @@ public sealed class AdminUsersController : ControllerBase
     target.Role = normalizedNewRole;
     target.UpdatedAt = DateTime.UtcNow;
 
-    _db.AdminAuditLogs.Add(new AdminAuditLog
-    {
-      Id = Guid.NewGuid(),
-      ActorUserId = actorId,
-      TargetUserId = userId,
-      Action = "ROLE_CHANGED",
-      BeforeRole = before,
-      AfterRole = normalizedNewRole,
-      CreatedAt = DateTime.UtcNow
-    });
+    // Record audit entry via helper (S1-4)
+    await _audit.LogAsync(
+      new AuditEvent(
+        ActorUserId: actorId,
+        ActorRole: actorRole,
+        ActionType: "USER_ROLE_CHANGED",
+        EntityType: "USER",
+        EntityId: userId,
+        Before: new { role = before },
+        After: new { role = normalizedNewRole },
+        IpAddress: ip,
+        UserAgent: userAgent
+      ),
+      ct
+    );
 
     await _db.SaveChangesAsync(ct);
     await tx.CommitAsync(ct);
 
     return NoContent();
   }
+
 }

@@ -16,4 +16,10 @@ public sealed class DevNullEmailSender : IMKEmailSender
     _logger.LogInformation("Email verification for {Email}: {Link}", email, verificationLink);
     return Task.CompletedTask;
   }
+
+  public Task SendPasswordResetAsync(string email, string resetLink, CancellationToken ct)
+  {
+    _logger.LogInformation("Password reset for {Email}: {Link}", email, resetLink);
+    return Task.CompletedTask;
+  }
 }

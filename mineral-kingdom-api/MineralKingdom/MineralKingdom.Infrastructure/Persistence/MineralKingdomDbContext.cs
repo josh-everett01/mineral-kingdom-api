@@ -17,6 +17,10 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<EmailVerificationToken> EmailVerificationTokens => Set<EmailVerificationToken>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<AdminAuditLog> AdminAuditLogs => Set<AdminAuditLog>();
+    public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
+    public DbSet<SupportTicket> SupportTickets => Set<SupportTicket>();
+
+
 
 
 
@@ -105,6 +109,38 @@ public class MineralKingdomDbContext : DbContext
 
             e.HasIndex(x => x.ActorUserId);
             e.HasIndex(x => new { x.EntityType, x.EntityId });
+        });
+
+        modelBuilder.Entity<PasswordResetToken>(b =>
+        {
+            b.ToTable("password_reset_tokens");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.TokenHash)
+            .IsRequired()
+            .HasMaxLength(128);
+
+            b.HasIndex(x => x.TokenHash).IsUnique();
+            b.HasIndex(x => x.UserId);
+
+            b.HasOne(x => x.User)
+            .WithMany()
+            .HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<SupportTicket>(b =>
+        {
+            b.ToTable("support_tickets");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.Email).IsRequired().HasMaxLength(320);
+            b.Property(x => x.Subject).IsRequired().HasMaxLength(200);
+            b.Property(x => x.Category).IsRequired().HasMaxLength(30);
+            b.Property(x => x.Message).IsRequired().HasMaxLength(4000);
+            b.Property(x => x.Status).IsRequired().HasMaxLength(30);
+
+            b.HasIndex(x => x.CreatedAt);
         });
     }
 }

@@ -52,9 +52,12 @@ public sealed class Worker : BackgroundService
         var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
         var claimer = scope.ServiceProvider.GetRequiredService<JobClaimingService>();
 
-        // Register handlers (keep it simple for now)
         var registry = new JobHandlerRegistry();
         registry.Register(scope.ServiceProvider.GetRequiredService<NoopJobHandler>());
+#if DEBUG
+        registry.Register(scope.ServiceProvider.GetRequiredService<AlwaysFailJobHandler>());
+#endif
+
 
         var now = DateTimeOffset.UtcNow;
         var claimed = await claimer.ClaimDueAsync(_workerId, BatchSize, _lockTimeout, now, ct);
@@ -108,22 +111,9 @@ public sealed class Worker : BackgroundService
         }
         catch (Exception ex)
         {
-            // Retry / DLQ behavior
-            job.Attempts += 1;
-            job.LastError = ex.Message;
-            job.LockedAt = null;
-            job.LockedBy = null;
-            job.UpdatedAt = DateTimeOffset.UtcNow;
-
-            if (job.Attempts >= job.MaxAttempts)
-            {
-                job.Status = JobStatuses.DeadLetter;
-            }
-            else
-            {
-                job.Status = JobStatuses.Pending;
-                job.RunAt = DateTimeOffset.UtcNow.AddSeconds(10 * job.Attempts); // simple backoff
-            }
+            // Retry / DLQ behavior (shared policy)
+            var now = DateTimeOffset.UtcNow;
+            JobFailureProcessor.ApplyFailure(job, now, ex.Message, includeJitter: true);
 
             await db.SaveChangesAsync(ct);
         }
@@ -136,12 +126,22 @@ public sealed class Worker : BackgroundService
       bool deadLetter,
       CancellationToken ct)
     {
-        job.Attempts += 1;
-        job.LastError = error;
-        job.LockedAt = null;
-        job.LockedBy = null;
-        job.UpdatedAt = DateTimeOffset.UtcNow;
-        job.Status = deadLetter ? JobStatuses.DeadLetter : JobStatuses.Failed;
+        var now = DateTimeOffset.UtcNow;
+
+        // If caller explicitly wants DLQ, force it (e.g., unknown job type).
+        if (deadLetter)
+        {
+            job.Attempts += 1;
+            job.LastError = error;
+            job.LockedAt = null;
+            job.LockedBy = null;
+            job.UpdatedAt = now;
+            job.Status = JobStatuses.DeadLetter;
+        }
+        else
+        {
+            JobFailureProcessor.ApplyFailure(job, now, error, includeJitter: true);
+        }
         await db.SaveChangesAsync(ct);
     }
 }

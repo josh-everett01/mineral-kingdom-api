@@ -28,6 +28,11 @@ public class Program
               services.AddSingleton<JobHandlerRegistry>();
               services.AddScoped<JobClaimingService>();
               services.AddScoped<NoopJobHandler>();
+
+#if DEBUG
+              services.AddScoped<AlwaysFailJobHandler>();
+#endif
+
               services.AddHostedService<Worker>();
           })
           .Build();

@@ -23,12 +23,19 @@ public sealed class JobClaimingService
   {
     await using var db = await _dbFactory.CreateDbContextAsync(ct);
 
-    // Optional: reclaim stale RUNNING jobs (worker crashed) by flipping them back to PENDING
+    // Optional: reclaim stale RUNNING jobs (worker crashed).
+    // Treat as a failure so it flows through the normal retry/DLQ semantics.
     var staleBefore = now - lockTimeout;
 
     await db.Database.ExecuteSqlInterpolatedAsync($@"
       UPDATE jobs
-      SET ""Status"" = 'PENDING',
+      SET ""Attempts"" = ""Attempts"" + 1,
+          ""Status"" = CASE
+              WHEN (""Attempts"" + 1) >= ""MaxAttempts"" THEN 'DEAD_LETTER'
+              ELSE 'FAILED'
+          END,
+          ""RunAt"" = {now},
+          ""LastError"" = 'STALE_LOCK_TIMEOUT',
           ""LockedAt"" = NULL,
           ""LockedBy"" = NULL,
           ""UpdatedAt"" = {now}
@@ -46,7 +53,7 @@ public sealed class JobClaimingService
       .FromSqlInterpolated($@"
         SELECT *
         FROM jobs
-        WHERE ""Status"" = 'PENDING'
+        WHERE ""Status"" IN ('PENDING', 'FAILED')
           AND ""RunAt"" <= {now}
           AND ""CompletedAt"" IS NULL
         ORDER BY ""RunAt"" ASC

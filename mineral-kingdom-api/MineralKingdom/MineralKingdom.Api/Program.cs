@@ -7,12 +7,14 @@ using MineralKingdom.Infrastructure.Configuration;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using MineralKingdom.Infrastructure.Security;
+using MineralKingdom.Worker.Jobs;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Primitives;
+using MineralKingdom.Infrastructure.Security.Jobs;
 
 
 
@@ -32,11 +34,16 @@ public class Program
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
 
-        builder.Services.AddDbContext<MineralKingdomDbContext>(options =>
+        builder.Services.AddPooledDbContextFactory<MineralKingdomDbContext>(options =>
         {
             var cs = DbConnectionFactory.BuildPostgresConnectionString(builder.Configuration);
             options.UseNpgsql(cs);
         });
+
+        // Keep this while you still have services that inject MineralKingdomDbContext directly
+        builder.Services.AddScoped(sp =>
+          sp.GetRequiredService<IDbContextFactory<MineralKingdomDbContext>>().CreateDbContext());
+
 
         builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("MK_JWT"));
 
@@ -58,6 +65,8 @@ public class Program
         builder.Services.AddScoped<IAuditLogger, AuditLogger>();
         builder.Services.AddScoped<PasswordResetTokenService>();
         builder.Services.AddScoped<PasswordResetService>();
+        builder.Services.AddScoped<NoopJobHandler>();
+        builder.Services.AddScoped<JobClaimingService>();
 
 
         // -------------------------

@@ -72,6 +72,8 @@ public class Program
         });
 
         builder.Services.AddScoped<IAuthorizationHandler, EmailVerifiedHandler>();
+        builder.Services.AddScoped<IJobQueue, DbJobQueue>();
+
 
         // Authentication:
         // - Testing: register BOTH TestAuth (default) + JwtBearer (so specific endpoints can force Bearer)

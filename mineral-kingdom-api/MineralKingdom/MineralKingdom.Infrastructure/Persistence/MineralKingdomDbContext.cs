@@ -19,6 +19,7 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<AdminAuditLog> AdminAuditLogs => Set<AdminAuditLog>();
     public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
     public DbSet<SupportTicket> SupportTickets => Set<SupportTicket>();
+    public DbSet<BackgroundJob> Jobs => Set<BackgroundJob>();
 
 
 
@@ -141,6 +142,46 @@ public class MineralKingdomDbContext : DbContext
             b.Property(x => x.Status).IsRequired().HasMaxLength(30);
 
             b.HasIndex(x => x.CreatedAt);
+        });
+
+        modelBuilder.Entity<BackgroundJob>(b =>
+        {
+            b.ToTable("jobs");
+
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.Type)
+            .IsRequired()
+            .HasMaxLength(80);
+
+            b.Property(x => x.Status)
+            .IsRequired()
+            .HasMaxLength(30)
+            .HasDefaultValue("PENDING");
+
+            b.Property(x => x.PayloadJson)
+            .HasColumnType("jsonb");
+
+            b.Property(x => x.Attempts)
+            .HasDefaultValue(0);
+
+            b.Property(x => x.MaxAttempts)
+            .HasDefaultValue(8);
+
+            b.Property(x => x.RunAt)
+            .IsRequired();
+
+            b.Property(x => x.LockedBy)
+            .HasMaxLength(80);
+
+            b.Property(x => x.LastError)
+            .HasColumnType("text");
+
+            b.HasIndex(x => new { x.Status, x.RunAt })
+            .HasDatabaseName("IX_jobs_Status_RunAt");
+
+            b.HasIndex(x => x.LockedAt)
+            .HasDatabaseName("IX_jobs_LockedAt");
         });
     }
 }

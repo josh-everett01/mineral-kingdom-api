@@ -34,5 +34,8 @@
     <ProjectReference Include="..\MineralKingdom.Contracts\MineralKingdom.Contracts.csproj">
       <GlobalPropertiesToRemove></GlobalPropertiesToRemove>
     </ProjectReference>
+    <ProjectReference Include="..\MineralKingdom.Worker\MineralKingdom.Worker.csproj">
+      <GlobalPropertiesToRemove></GlobalPropertiesToRemove>
+    </ProjectReference>
   </ItemGroup>
 </Project>

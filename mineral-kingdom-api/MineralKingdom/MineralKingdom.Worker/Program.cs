@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using MineralKingdom.Infrastructure.Configuration;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Security.Jobs;
+using MineralKingdom.Worker.Cron;
 using MineralKingdom.Worker.Jobs;
 
 namespace MineralKingdom.Worker;
@@ -16,14 +17,14 @@ public class Program
           .ConfigureServices((ctx, services) =>
           {
               services.AddPooledDbContextFactory<MineralKingdomDbContext>(options =>
-          {
-              var cs = DbConnectionFactory.BuildPostgresConnectionString(ctx.Configuration);
-              options.UseNpgsql(cs);
-          });
+            {
+                var cs = DbConnectionFactory.BuildPostgresConnectionString(ctx.Configuration);
+                options.UseNpgsql(cs);
+            });
 
               // ✅ makes MineralKingdomDbContext injectable (scoped) for Worker.cs and any services that still expect it
               services.AddScoped(sp =>
-            sp.GetRequiredService<IDbContextFactory<MineralKingdomDbContext>>().CreateDbContext());
+                 sp.GetRequiredService<IDbContextFactory<MineralKingdomDbContext>>().CreateDbContext());
 
               services.AddSingleton<JobHandlerRegistry>();
               services.AddScoped<JobClaimingService>();
@@ -32,6 +33,11 @@ public class Program
 #if DEBUG
               services.AddScoped<AlwaysFailJobHandler>();
 #endif
+
+              services.AddSingleton<CronSweepEnqueuer>();
+              services.AddHostedService<CronSweepHostedService>();
+              services.AddScoped<JobSanitySweepHandler>();
+              services.AddScoped<JobRetrySweepHandler>();
 
               services.AddHostedService<Worker>();
           })

@@ -8,6 +8,8 @@ using MineralKingdom.Infrastructure.Persistence.Entities;
 using MineralKingdom.Infrastructure.Security.Jobs;
 using MineralKingdom.Worker.Jobs;
 using System.Diagnostics;
+using MineralKingdom.Worker.Cron;
+
 
 namespace MineralKingdom.Worker;
 
@@ -58,6 +60,8 @@ public sealed class Worker : BackgroundService
         registry.Register(scope.ServiceProvider.GetRequiredService<AlwaysFailJobHandler>());
 #endif
 
+        registry.Register(scope.ServiceProvider.GetRequiredService<JobSanitySweepHandler>());
+        registry.Register(scope.ServiceProvider.GetRequiredService<JobRetrySweepHandler>());
 
         var now = DateTimeOffset.UtcNow;
         var claimed = await claimer.ClaimDueAsync(_workerId, BatchSize, _lockTimeout, now, ct);

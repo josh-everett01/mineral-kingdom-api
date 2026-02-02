@@ -15,6 +15,7 @@ using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Primitives;
 using MineralKingdom.Infrastructure.Security.Jobs;
+using MineralKingdom.Contracts.Auth;
 
 
 
@@ -78,7 +79,20 @@ public class Program
                 policy.RequireAuthenticatedUser();
                 policy.AddRequirements(new EmailVerifiedRequirement());
             });
+
+            options.AddPolicy(AuthorizationPolicies.AdminAccess, policy =>
+            {
+                policy.RequireAuthenticatedUser();
+                policy.RequireRole(UserRoles.Staff, UserRoles.Owner);
+            });
+
+            options.AddPolicy(AuthorizationPolicies.OwnerOnly, policy =>
+            {
+                policy.RequireAuthenticatedUser();
+                policy.RequireRole(UserRoles.Owner);
+            });
         });
+
 
         builder.Services.AddScoped<IAuthorizationHandler, EmailVerifiedHandler>();
         builder.Services.AddScoped<IJobQueue, DbJobQueue>();

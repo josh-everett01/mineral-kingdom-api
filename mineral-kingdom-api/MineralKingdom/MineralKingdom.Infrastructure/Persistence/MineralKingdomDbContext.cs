@@ -258,24 +258,47 @@ public class MineralKingdomDbContext : DbContext
         });
 
         modelBuilder.Entity<ListingMedia>(b =>
-        {
-            b.ToTable("listing_media");
-            b.HasKey(x => x.Id);
+{
+    b.ToTable("listing_media");
+    b.HasKey(x => x.Id);
 
-            b.Property(x => x.MediaType).IsRequired().HasMaxLength(10);
-            b.Property(x => x.Url).IsRequired().HasMaxLength(2000);
-            b.Property(x => x.SortOrder).HasDefaultValue(0);
-            b.Property(x => x.IsPrimary).HasDefaultValue(false);
-            b.Property(x => x.Caption).HasMaxLength(500);
+    b.Property(x => x.MediaType).IsRequired().HasMaxLength(10);
 
-            b.Property(x => x.CreatedAt).IsRequired();
+    b.Property(x => x.Status)
+      .IsRequired()
+      .HasMaxLength(20)
+      .HasDefaultValue(MineralKingdom.Contracts.Listings.ListingMediaStatuses.Ready);
 
-            b.HasIndex(x => x.ListingId)
-                .HasDatabaseName("IX_listing_media_ListingId");
+    b.Property(x => x.StorageKey).HasMaxLength(512);
+    b.Property(x => x.OriginalFileName).HasMaxLength(255);
+    b.Property(x => x.ContentType).HasMaxLength(255);
 
-            b.HasIndex(x => new { x.ListingId, x.SortOrder })
-                .HasDatabaseName("IX_listing_media_ListingId_SortOrder");
-        });
+    b.Property(x => x.ContentLengthBytes)
+      .IsRequired()
+      .HasDefaultValue(0L);
+
+    b.Property(x => x.Url).IsRequired().HasMaxLength(2000);
+
+    b.Property(x => x.SortOrder).HasDefaultValue(0);
+    b.Property(x => x.IsPrimary).HasDefaultValue(false);
+    b.Property(x => x.Caption).HasMaxLength(500);
+
+    b.Property(x => x.CreatedAt).IsRequired();
+    b.Property(x => x.UpdatedAt).IsRequired();
+    b.Property(x => x.DeletedAt);
+
+    b.HasIndex(x => x.ListingId)
+      .HasDatabaseName("IX_listing_media_ListingId");
+
+    b.HasIndex(x => new { x.ListingId, x.SortOrder })
+      .HasDatabaseName("IX_listing_media_ListingId_SortOrder");
+
+    // Optional but useful for immutability/debugging (you can add later if desired):
+    // b.HasIndex(x => x.StorageKey)
+    //   .HasDatabaseName("IX_listing_media_StorageKey");
+});
+
+
 
     }
 }

@@ -169,13 +169,16 @@ public sealed class AdminListingsController : ControllerBase
 
     var images = await _db.ListingMedia
       .AsNoTracking()
-      .Where(x => x.ListingId == id && x.MediaType == ListingMediaTypes.Image)
+      .Where(x => x.ListingId == id
+              && x.MediaType == ListingMediaTypes.Image
+              && x.Status == ListingMediaStatuses.Ready)
       .ToListAsync(ct);
 
     if (images.Count < 1) missing.Add("IMAGE_REQUIRED");
 
     var primaryImages = images.Count(x => x.IsPrimary);
     if (images.Count > 0 && primaryImages != 1) missing.Add("PRIMARY_IMAGE_REQUIRED_EXACTLY_ONE");
+
 
     // videos cannot be primary (defensive check)
     var badPrimaryVideo = await _db.ListingMedia.AsNoTracking()

@@ -16,6 +16,9 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Primitives;
 using MineralKingdom.Infrastructure.Security.Jobs;
 using MineralKingdom.Contracts.Auth;
+using MineralKingdom.Infrastructure.Media.Storage;
+using Microsoft.Extensions.Options;
+using MineralKingdom.Infrastructure.Media;
 
 
 
@@ -68,6 +71,21 @@ public class Program
         builder.Services.AddScoped<PasswordResetService>();
         builder.Services.AddScoped<NoopJobHandler>();
         builder.Services.AddScoped<JobClaimingService>();
+        builder.Services.Configure<MediaStorageOptions>(builder.Configuration.GetSection("MK_MEDIA"));
+
+        builder.Services.AddSingleton<IObjectStorage>(sp =>
+        {
+            var opts = sp.GetRequiredService<IOptions<MediaStorageOptions>>().Value;
+            var provider = (opts.Provider ?? "").Trim();
+
+            if (provider.Equals("S3", StringComparison.OrdinalIgnoreCase))
+                return new S3ObjectStorage(opts);
+
+            return new FakeObjectStorage();
+        });
+
+        builder.Services.AddScoped<MediaUploadService>();
+
 
 
         // -------------------------

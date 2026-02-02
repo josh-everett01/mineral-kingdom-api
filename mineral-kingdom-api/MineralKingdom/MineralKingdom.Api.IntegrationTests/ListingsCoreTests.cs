@@ -84,16 +84,13 @@ public sealed class ListingsCoreTests
 
     (await client.SendAsync(patch)).StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-    // add VIDEO only (does not satisfy publish)
-    var addVideo = new HttpRequestMessage(HttpMethod.Post, $"/api/admin/listings/{listingId}/media");
-    AddOwnerHeaders(addVideo, owner.Id);
-    addVideo.Content = JsonContent.Create(new
-    {
-      mediaType = "VIDEO",
-      url = "https://example.com/video.mp4"
-    });
-
-    (await client.SendAsync(addVideo)).StatusCode.Should().Be(HttpStatusCode.OK);
+    // initiate + complete VIDEO only (does not satisfy publish)
+    _ = await InitiateAndCompleteAsync(client, owner.Id, listingId,
+      mediaType: "VIDEO",
+      fileName: "video.mp4",
+      contentType: "video/mp4",
+      contentLengthBytes: 1024 * 1024
+    );
 
     // publish should fail
     var pub = new HttpRequestMessage(HttpMethod.Post, $"/api/admin/listings/{listingId}/publish");
@@ -133,15 +130,13 @@ public sealed class ListingsCoreTests
     });
     (await client.SendAsync(patch)).StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-    // add an IMAGE (auto-primary if first)
-    var addImg = new HttpRequestMessage(HttpMethod.Post, $"/api/admin/listings/{listingId}/media");
-    AddOwnerHeaders(addImg, owner.Id);
-    addImg.Content = JsonContent.Create(new
-    {
-      mediaType = "IMAGE",
-      url = "https://example.com/img1.jpg"
-    });
-    (await client.SendAsync(addImg)).StatusCode.Should().Be(HttpStatusCode.OK);
+    // initiate + complete an IMAGE (auto-primary if first)
+    _ = await InitiateAndCompleteAsync(client, owner.Id, listingId,
+      mediaType: "IMAGE",
+      fileName: "img1.jpg",
+      contentType: "image/jpeg",
+      contentLengthBytes: 1024 * 1024
+    );
 
     // publish should succeed
     var pub = new HttpRequestMessage(HttpMethod.Post, $"/api/admin/listings/{listingId}/publish");
@@ -188,11 +183,13 @@ public sealed class ListingsCoreTests
     });
     (await client.SendAsync(patch)).StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-    // add image
-    var addImg = new HttpRequestMessage(HttpMethod.Post, $"/api/admin/listings/{listingId}/media");
-    AddOwnerHeaders(addImg, owner.Id);
-    addImg.Content = JsonContent.Create(new { mediaType = "IMAGE", url = "https://example.com/calcite.jpg" });
-    (await client.SendAsync(addImg)).StatusCode.Should().Be(HttpStatusCode.OK);
+    // initiate + complete image
+    _ = await InitiateAndCompleteAsync(client, owner.Id, listingId,
+      mediaType: "IMAGE",
+      fileName: "calcite.jpg",
+      contentType: "image/jpeg",
+      contentLengthBytes: 1024 * 1024
+    );
 
     // publish
     var pub = new HttpRequestMessage(HttpMethod.Post, $"/api/admin/listings/{listingId}/publish");
@@ -270,9 +267,7 @@ public sealed class ListingsCoreTests
   private static async Task<Guid> CreateDraftListingAsync(HttpClient client, Guid ownerId)
   {
     var req = new HttpRequestMessage(HttpMethod.Post, "/api/admin/listings");
-    req.Headers.Add("X-Test-UserId", ownerId.ToString());
-    req.Headers.Add("X-Test-EmailVerified", "true");
-    req.Headers.Add("X-Test-Role", UserRoles.Owner);
+    AddOwnerHeaders(req, ownerId);
     req.Content = JsonContent.Create(new { });
 
     var resp = await client.SendAsync(req);
@@ -293,4 +288,50 @@ public sealed class ListingsCoreTests
     decimal? HeightCm,
     int? WeightGrams
   );
+
+  private sealed record InitiateResp(
+    Guid MediaId,
+    string StorageKey,
+    string UploadUrl,
+    Dictionary<string, string> RequiredHeaders,
+    DateTimeOffset ExpiresAt,
+    string PublicUrl
+  );
+
+  private static async Task<Guid> InitiateAndCompleteAsync(
+    HttpClient client,
+    Guid ownerId,
+    Guid listingId,
+    string mediaType,
+    string fileName,
+    string contentType,
+    long contentLengthBytes,
+    bool? isPrimary = null)
+  {
+    var init = new HttpRequestMessage(HttpMethod.Post, $"/api/admin/listings/{listingId}/media/initiate");
+    AddOwnerHeaders(init, ownerId);
+
+    init.Content = JsonContent.Create(new
+    {
+      mediaType,
+      fileName,
+      contentType,
+      contentLengthBytes,
+      isPrimary
+    });
+
+    var initResp = await client.SendAsync(init);
+    initResp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    var body = await initResp.Content.ReadFromJsonAsync<InitiateResp>();
+    body.Should().NotBeNull();
+
+    var complete = new HttpRequestMessage(HttpMethod.Post, $"/api/admin/media/{body!.MediaId}/complete");
+    AddOwnerHeaders(complete, ownerId);
+
+    var compResp = await client.SendAsync(complete);
+    compResp.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+    return body.MediaId;
+  }
 }

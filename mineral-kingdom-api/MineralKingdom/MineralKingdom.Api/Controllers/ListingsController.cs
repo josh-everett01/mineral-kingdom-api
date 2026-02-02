@@ -41,10 +41,11 @@ public sealed class ListingsController : ControllerBase
       return NotFound();
 
     var media = await _db.ListingMedia.AsNoTracking()
-      .Where(x => x.ListingId == id)
-      .OrderBy(x => x.SortOrder)
-      .Select(x => new MediaDto(x.Id, x.MediaType, x.Url, x.SortOrder, x.IsPrimary, x.Caption))
-      .ToListAsync(ct);
+          .Where(x => x.ListingId == id && x.Status == ListingMediaStatuses.Ready)
+          .OrderBy(x => x.SortOrder)
+          .Select(x => new MediaDto(x.Id, x.MediaType, x.Url, x.SortOrder, x.IsPrimary, x.Caption))
+          .ToListAsync(ct);
+
 
     return Ok(new ListingDto(
       listing.Id,

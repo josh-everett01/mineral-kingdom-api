@@ -52,6 +52,12 @@ public sealed class TestAppFactory : WebApplicationFactory<MineralKingdom.Api.Pr
 
         // helpful: makes sure exceptions are verbose
         ["ASPNETCORE_DETAILEDERRORS"] = "true",
+
+        ["MK_MEDIA:PROVIDER"] = "FAKE",
+        ["MK_MEDIA:BUCKET"] = "mk-test-media",
+        ["MK_MEDIA:CDN_BASE_URL"] = "https://cdn.test",
+        ["MK_MEDIA:URL_EXPIRATION_SECONDS"] = "900",
+
       };
 
       configBuilder.AddInMemoryCollection(overrides);

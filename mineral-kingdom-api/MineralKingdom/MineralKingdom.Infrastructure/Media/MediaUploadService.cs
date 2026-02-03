@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using MineralKingdom.Contracts.Auctions;
 using MineralKingdom.Contracts.Listings;
 using MineralKingdom.Infrastructure.Configuration;
 using MineralKingdom.Infrastructure.Media.Storage;
@@ -79,16 +80,20 @@ public sealed class MediaUploadService
     if (!listingExists)
       return (false, "LISTING_NOT_FOUND", null);
 
-    // Count limits include UPLOADING + READY (exclude FAILED)
     var imageCount = await _db.ListingMedia.AsNoTracking()
-      .CountAsync(x => x.ListingId == req.ListingId
-                    && x.MediaType == ListingMediaTypes.Image
-                    && x.Status != ListingMediaStatuses.Failed, ct);
+                      .CountAsync(x => x.ListingId == req.ListingId
+                      && x.MediaType == ListingMediaTypes.Image
+                      && x.Status != ListingMediaStatuses.Failed
+                      && x.Status != ListingMediaStatuses.Deleted
+                      && x.DeletedAt == null, ct);
+
 
     var videoCount = await _db.ListingMedia.AsNoTracking()
-      .CountAsync(x => x.ListingId == req.ListingId
-                    && x.MediaType == ListingMediaTypes.Video
-                    && x.Status != ListingMediaStatuses.Failed, ct);
+                      .CountAsync(x => x.ListingId == req.ListingId
+                        && x.MediaType == ListingMediaTypes.Video
+                        && x.Status != ListingMediaStatuses.Failed
+                        && x.Status != ListingMediaStatuses.Deleted
+                        && x.DeletedAt == null, ct);
 
     if (mt == ListingMediaTypes.Image && imageCount >= MaxImagesPerListing)
       return (false, "IMAGE_LIMIT_EXCEEDED", null);
@@ -214,6 +219,53 @@ public sealed class MediaUploadService
     {
       // Defensive: videos cannot be primary
       row.IsPrimary = false;
+    }
+
+    await _db.SaveChangesAsync(ct);
+    return (true, null);
+  }
+
+
+  public async Task<(bool Ok, string? Error)> DeleteAsync(Guid mediaId, CancellationToken ct)
+  {
+    var row = await _db.ListingMedia.SingleOrDefaultAsync(x => x.Id == mediaId, ct);
+    if (row is null) return (false, "MEDIA_NOT_FOUND");
+
+    if (string.Equals(row.Status, ListingMediaStatuses.Deleted, StringComparison.OrdinalIgnoreCase))
+      return (false, "MEDIA_ALREADY_DELETED");
+
+    // Block deletion during LIVE/CLOSING auctions
+    var hasBlockingAuction = await _db.Auctions.AsNoTracking()
+      .AnyAsync(a =>
+          a.ListingId == row.ListingId &&
+          (a.Status == AuctionStatuses.Live || a.Status == AuctionStatuses.Closing),
+        ct);
+
+    if (hasBlockingAuction)
+      return (false, "MEDIA_DELETE_BLOCKED_AUCTION_ACTIVE");
+
+    var now = DateTimeOffset.UtcNow;
+
+    // Soft-delete
+    row.Status = ListingMediaStatuses.Deleted;
+    row.DeletedAt = now;
+    row.UpdatedAt = now;
+    row.IsPrimary = false;
+
+    // If we deleted a primary image, promote the next READY image (if any)
+    if (string.Equals(row.MediaType, ListingMediaTypes.Image, StringComparison.OrdinalIgnoreCase))
+    {
+      var next = await _db.ListingMedia
+        .Where(x => x.ListingId == row.ListingId
+                    && x.MediaType == ListingMediaTypes.Image
+                    && x.Status == ListingMediaStatuses.Ready
+                    && x.DeletedAt == null
+                    && x.Id != row.Id)
+        .OrderBy(x => x.SortOrder)
+        .FirstOrDefaultAsync(ct);
+
+      if (next is not null)
+        next.IsPrimary = true;
     }
 
     await _db.SaveChangesAsync(ct);

@@ -23,6 +23,8 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<Mineral> Minerals => Set<Mineral>();
     public DbSet<Listing> Listings => Set<Listing>();
     public DbSet<ListingMedia> ListingMedia => Set<ListingMedia>();
+    public DbSet<Auction> Auctions => Set<Auction>();
+
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -184,16 +186,16 @@ public class MineralKingdomDbContext : DbContext
         });
 
         modelBuilder.Entity<Mineral>(b =>
-{
-    b.ToTable("minerals");
-    b.HasKey(x => x.Id);
+        {
+            b.ToTable("minerals");
+            b.HasKey(x => x.Id);
 
-    b.Property(x => x.Name).IsRequired().HasMaxLength(200);
-    b.HasIndex(x => x.Name).IsUnique();
+            b.Property(x => x.Name).IsRequired().HasMaxLength(200);
+            b.HasIndex(x => x.Name).IsUnique();
 
-    b.Property(x => x.CreatedAt).IsRequired();
-    b.Property(x => x.UpdatedAt).IsRequired();
-});
+            b.Property(x => x.CreatedAt).IsRequired();
+            b.Property(x => x.UpdatedAt).IsRequired();
+        });
 
         modelBuilder.Entity<Listing>(b =>
         {
@@ -204,9 +206,9 @@ public class MineralKingdomDbContext : DbContext
             b.Property(x => x.Description).HasColumnType("text");
 
             b.Property(x => x.Status)
-      .IsRequired()
-      .HasMaxLength(30)
-      .HasDefaultValue("DRAFT");
+                .IsRequired()
+                .HasMaxLength(30)
+                .HasDefaultValue("DRAFT");
 
             b.Property(x => x.LocalityDisplay).HasMaxLength(400);
             b.Property(x => x.CountryCode).HasMaxLength(2);
@@ -235,70 +237,80 @@ public class MineralKingdomDbContext : DbContext
             b.Property(x => x.ArchivedAt);
 
             b.HasOne(x => x.PrimaryMineral)
-      .WithMany()
-      .HasForeignKey(x => x.PrimaryMineralId)
-      .OnDelete(DeleteBehavior.Restrict);
+                .WithMany()
+                .HasForeignKey(x => x.PrimaryMineralId)
+                .OnDelete(DeleteBehavior.Restrict);
 
             b.HasMany(x => x.Media)
-      .WithOne(x => x.Listing)
-      .HasForeignKey(x => x.ListingId)
-      .OnDelete(DeleteBehavior.Cascade);
+                .WithOne(x => x.Listing)
+                .HasForeignKey(x => x.ListingId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             b.HasIndex(x => new { x.Status, x.PublishedAt })
-      .HasDatabaseName("IX_listings_Status_PublishedAt");
+                .HasDatabaseName("IX_listings_Status_PublishedAt");
 
             b.HasIndex(x => x.PrimaryMineralId)
-      .HasDatabaseName("IX_listings_PrimaryMineralId");
+                .HasDatabaseName("IX_listings_PrimaryMineralId");
 
             b.HasIndex(x => new { x.CountryCode, x.AdminArea1 })
-      .HasDatabaseName("IX_listings_Country_AdminArea1");
+                .HasDatabaseName("IX_listings_Country_AdminArea1");
 
             b.HasIndex(x => x.SizeClass)
-      .HasDatabaseName("IX_listings_SizeClass");
+                .HasDatabaseName("IX_listings_SizeClass");
         });
 
         modelBuilder.Entity<ListingMedia>(b =>
-{
-    b.ToTable("listing_media");
-    b.HasKey(x => x.Id);
+        {
+            b.ToTable("listing_media");
+            b.HasKey(x => x.Id);
 
-    b.Property(x => x.MediaType).IsRequired().HasMaxLength(10);
+            b.Property(x => x.MediaType).IsRequired().HasMaxLength(10);
 
-    b.Property(x => x.Status)
-      .IsRequired()
-      .HasMaxLength(20)
-      .HasDefaultValue(MineralKingdom.Contracts.Listings.ListingMediaStatuses.Ready);
+            b.Property(x => x.Status)
+            .IsRequired()
+            .HasMaxLength(20)
+            .HasDefaultValue(MineralKingdom.Contracts.Listings.ListingMediaStatuses.Ready);
 
-    b.Property(x => x.StorageKey).HasMaxLength(512);
-    b.Property(x => x.OriginalFileName).HasMaxLength(255);
-    b.Property(x => x.ContentType).HasMaxLength(255);
+            b.Property(x => x.StorageKey).HasMaxLength(512);
+            b.Property(x => x.OriginalFileName).HasMaxLength(255);
+            b.Property(x => x.ContentType).HasMaxLength(255);
 
-    b.Property(x => x.ContentLengthBytes)
-      .IsRequired()
-      .HasDefaultValue(0L);
+            b.Property(x => x.ContentLengthBytes)
+            .IsRequired()
+            .HasDefaultValue(0L);
 
-    b.Property(x => x.Url).IsRequired().HasMaxLength(2000);
+            b.Property(x => x.Url).IsRequired().HasMaxLength(2000);
 
-    b.Property(x => x.SortOrder).HasDefaultValue(0);
-    b.Property(x => x.IsPrimary).HasDefaultValue(false);
-    b.Property(x => x.Caption).HasMaxLength(500);
+            b.Property(x => x.SortOrder).HasDefaultValue(0);
+            b.Property(x => x.IsPrimary).HasDefaultValue(false);
+            b.Property(x => x.Caption).HasMaxLength(500);
 
-    b.Property(x => x.CreatedAt).IsRequired();
-    b.Property(x => x.UpdatedAt).IsRequired();
-    b.Property(x => x.DeletedAt);
+            b.Property(x => x.CreatedAt).IsRequired();
+            b.Property(x => x.UpdatedAt).IsRequired();
+            b.Property(x => x.DeletedAt);
 
-    b.HasIndex(x => x.ListingId)
-      .HasDatabaseName("IX_listing_media_ListingId");
+            b.HasIndex(x => x.ListingId)
+            .HasDatabaseName("IX_listing_media_ListingId");
 
-    b.HasIndex(x => new { x.ListingId, x.SortOrder })
-      .HasDatabaseName("IX_listing_media_ListingId_SortOrder");
+            b.HasIndex(x => new { x.ListingId, x.SortOrder })
+            .HasDatabaseName("IX_listing_media_ListingId_SortOrder");
 
-    // Optional but useful for immutability/debugging (you can add later if desired):
-    // b.HasIndex(x => x.StorageKey)
-    //   .HasDatabaseName("IX_listing_media_StorageKey");
-});
+            // Optional but useful for immutability/debugging (you can add later if desired):
+            // b.HasIndex(x => x.StorageKey)
+            //   .HasDatabaseName("IX_listing_media_StorageKey");
+        });
+        modelBuilder.Entity<Auction>(b =>
+        {
+            b.ToTable("auctions");
+            b.HasKey(x => x.Id);
 
+            b.Property(x => x.Status).IsRequired().HasMaxLength(20);
 
+            b.Property(x => x.CreatedAt).IsRequired();
+            b.Property(x => x.UpdatedAt).IsRequired();
 
+            b.HasIndex(x => x.ListingId).HasDatabaseName("IX_auctions_ListingId");
+            b.HasIndex(x => new { x.ListingId, x.Status }).HasDatabaseName("IX_auctions_ListingId_Status");
+        });
     }
 }

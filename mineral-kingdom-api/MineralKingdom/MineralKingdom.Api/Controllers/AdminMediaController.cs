@@ -43,4 +43,19 @@ public sealed class AdminMediaController : ControllerBase
     var raw = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
     return Guid.TryParse(raw, out actorId);
   }
+
+  [HttpDelete("/api/admin/media/{mediaId:guid}")]
+  public async Task<IActionResult> Delete(Guid mediaId, CancellationToken ct)
+  {
+    var (ok, err) = await _uploads.DeleteAsync(mediaId, ct);
+    if (ok) return NoContent();
+
+    if (err == "MEDIA_DELETE_BLOCKED_AUCTION_ACTIVE")
+      return Conflict(new { error = err });
+
+    if (err == "MEDIA_NOT_FOUND")
+      return NotFound(new { error = err });
+
+    return BadRequest(new { error = err });
+  }
 }

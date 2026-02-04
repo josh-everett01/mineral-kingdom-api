@@ -85,7 +85,9 @@ public class Program
         });
 
         builder.Services.AddScoped<MediaUploadService>();
-
+        builder.Services.AddScoped<MineralKingdom.Infrastructure.Store.OrderSnapshotService>();
+        builder.Services.AddScoped<MineralKingdom.Infrastructure.Store.StoreOfferService>();
+        builder.Services.AddScoped<MineralKingdom.Infrastructure.Orders.OrderService>();
 
 
         // -------------------------

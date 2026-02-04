@@ -24,11 +24,17 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<Listing> Listings => Set<Listing>();
     public DbSet<ListingMedia> ListingMedia => Set<ListingMedia>();
     public DbSet<Auction> Auctions => Set<Auction>();
+    public DbSet<StoreOffer> StoreOffers => Set<StoreOffer>();
+    public DbSet<Order> Orders => Set<Order>();
+    public DbSet<OrderLine> OrderLines => Set<OrderLine>();
+
 
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(MineralKingdomDbContext).Assembly);
 
         modelBuilder.Entity<DbPing>(b =>
         {
@@ -312,5 +318,72 @@ public class MineralKingdomDbContext : DbContext
             b.HasIndex(x => x.ListingId).HasDatabaseName("IX_auctions_ListingId");
             b.HasIndex(x => new { x.ListingId, x.Status }).HasDatabaseName("IX_auctions_ListingId_Status");
         });
+
+        modelBuilder.Entity<StoreOffer>(b =>
+{
+    b.ToTable("store_offers");
+    b.HasKey(x => x.Id);
+
+    b.Property(x => x.DiscountType).IsRequired().HasMaxLength(20);
+
+    b.Property(x => x.PriceCents).IsRequired();
+    b.Property(x => x.DiscountCents);
+    b.Property(x => x.DiscountPercentBps);
+
+    b.Property(x => x.IsActive).HasDefaultValue(true);
+
+    b.Property(x => x.CreatedAt).IsRequired();
+    b.Property(x => x.UpdatedAt).IsRequired();
+    b.Property(x => x.DeletedAt);
+
+    b.HasIndex(x => x.ListingId).HasDatabaseName("IX_store_offers_ListingId");
+    b.HasIndex(x => new { x.ListingId, x.IsActive }).HasDatabaseName("IX_store_offers_ListingId_IsActive");
+});
+
+        modelBuilder.Entity<Order>(b =>
+        {
+            b.ToTable("orders");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.CurrencyCode).IsRequired().HasMaxLength(3);
+            b.Property(x => x.Status).IsRequired().HasMaxLength(20);
+
+            b.Property(x => x.SubtotalCents).IsRequired();
+            b.Property(x => x.DiscountTotalCents).IsRequired();
+            b.Property(x => x.TotalCents).IsRequired();
+
+            b.Property(x => x.CreatedAt).IsRequired();
+            b.Property(x => x.UpdatedAt).IsRequired();
+
+            b.HasMany(x => x.Lines)
+                .WithOne(x => x.Order!)
+                .HasForeignKey(x => x.OrderId);
+
+            b.HasIndex(x => x.UserId).HasDatabaseName("IX_orders_UserId");
+        });
+
+        modelBuilder.Entity<OrderLine>(b =>
+        {
+            b.ToTable("order_lines");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.Quantity).IsRequired();
+
+            b.Property(x => x.UnitPriceCents).IsRequired();
+            b.Property(x => x.UnitDiscountCents).IsRequired();
+            b.Property(x => x.UnitFinalPriceCents).IsRequired();
+
+            b.Property(x => x.LineSubtotalCents).IsRequired();
+            b.Property(x => x.LineDiscountCents).IsRequired();
+            b.Property(x => x.LineTotalCents).IsRequired();
+
+            b.Property(x => x.CreatedAt).IsRequired();
+            b.Property(x => x.UpdatedAt).IsRequired();
+
+            b.HasIndex(x => x.OrderId).HasDatabaseName("IX_order_lines_OrderId");
+            b.HasIndex(x => x.OfferId).HasDatabaseName("IX_order_lines_OfferId");
+            b.HasIndex(x => x.ListingId).HasDatabaseName("IX_order_lines_ListingId");
+        });
+
     }
 }

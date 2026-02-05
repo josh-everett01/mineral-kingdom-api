@@ -19,6 +19,7 @@ using MineralKingdom.Contracts.Auth;
 using MineralKingdom.Infrastructure.Media.Storage;
 using Microsoft.Extensions.Options;
 using MineralKingdom.Infrastructure.Media;
+using MineralKingdom.Infrastructure.Store;
 
 
 
@@ -44,7 +45,6 @@ public class Program
             options.UseNpgsql(cs);
         });
 
-        // Keep this while you still have services that inject MineralKingdomDbContext directly
         builder.Services.AddScoped(sp =>
           sp.GetRequiredService<IDbContextFactory<MineralKingdomDbContext>>().CreateDbContext());
 
@@ -72,6 +72,9 @@ public class Program
         builder.Services.AddScoped<NoopJobHandler>();
         builder.Services.AddScoped<JobClaimingService>();
         builder.Services.Configure<MediaStorageOptions>(builder.Configuration.GetSection("MK_MEDIA"));
+        builder.Services.AddScoped<CartService>();
+        builder.Services.AddScoped<CheckoutService>();
+
 
         builder.Services.AddSingleton<IObjectStorage>(sp =>
         {

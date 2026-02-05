@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using MineralKingdom.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MineralKingdom.Infrastructure.Migrations
 {
     [DbContext(typeof(MineralKingdomDbContext))]
-    partial class MineralKingdomDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260204234650_S4_2_CartsAndCheckoutHolds")]
+    partial class S4_2_CartsAndCheckoutHolds
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -280,8 +283,8 @@ namespace MineralKingdom.Infrastructure.Migrations
 
                     b.HasIndex("CartId")
                         .IsUnique()
-                        .HasDatabaseName("IX_checkout_holds_CartId_Completed")
-                        .HasFilter("\"Status\" = 'COMPLETED'");
+                        .HasDatabaseName("UX_checkout_holds_CartId_Completed")
+                        .HasFilter("\"CompletedAt\" IS NOT NULL");
 
                     b.ToTable("checkout_holds", (string)null);
                 });

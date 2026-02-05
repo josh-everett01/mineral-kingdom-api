@@ -27,6 +27,10 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<StoreOffer> StoreOffers => Set<StoreOffer>();
     public DbSet<Order> Orders => Set<Order>();
     public DbSet<OrderLine> OrderLines => Set<OrderLine>();
+    public DbSet<Cart> Carts => Set<Cart>();
+    public DbSet<CartLine> CartLines => Set<CartLine>();
+    public DbSet<CheckoutHold> CheckoutHolds => Set<CheckoutHold>();
+
 
 
 

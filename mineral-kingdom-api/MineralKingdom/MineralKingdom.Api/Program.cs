@@ -20,6 +20,9 @@ using MineralKingdom.Infrastructure.Media.Storage;
 using Microsoft.Extensions.Options;
 using MineralKingdom.Infrastructure.Media;
 using MineralKingdom.Infrastructure.Store;
+using MineralKingdom.Infrastructure.Payments;
+using DotNetEnv;
+
 
 
 
@@ -32,6 +35,15 @@ public class Program
         var builder = WebApplication.CreateBuilder(args);
         Console.WriteLine($"ENV={builder.Environment.EnvironmentName}");
 
+        if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
+        {
+            var envPath = Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, "..", "..", ".env"));
+            if (File.Exists(envPath))
+            {
+                Env.Load(envPath);
+                builder.Configuration.AddEnvironmentVariables();
+            }
+        }
 
         // Add services to the container.
         builder.Services.AddControllers();
@@ -74,6 +86,16 @@ public class Program
         builder.Services.Configure<MediaStorageOptions>(builder.Configuration.GetSection("MK_MEDIA"));
         builder.Services.AddScoped<CartService>();
         builder.Services.AddScoped<CheckoutService>();
+        builder.Services.AddScoped<CheckoutPaymentService>();
+        builder.Services.AddScoped<PaymentWebhookService>();
+
+        builder.Services.AddScoped<ICheckoutPaymentProvider, FakeCheckoutPaymentProvider>();
+        builder.Services.AddScoped<ICheckoutPaymentProvider, StripeCheckoutPaymentProvider>();
+        builder.Services.Configure<PaymentsOptions>(builder.Configuration.GetSection("MK_PAYMENTS"));
+        builder.Services.Configure<StripeOptions>(builder.Configuration.GetSection("MK_STRIPE"));
+        builder.Services.Configure<PayPalOptions>(builder.Configuration.GetSection("MK_PAYPAL"));
+        builder.Services.AddHttpClient("paypal");
+        builder.Services.AddScoped<ICheckoutPaymentProvider, PayPalCheckoutPaymentProvider>();
 
 
         builder.Services.AddSingleton<IObjectStorage>(sp =>

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using MineralKingdom.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MineralKingdom.Infrastructure.Migrations
 {
     [DbContext(typeof(MineralKingdomDbContext))]
-    partial class MineralKingdomDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260206041954_S4_3_ClientReturnTracking")]
+    partial class S4_3_ClientReturnTracking
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -291,61 +294,6 @@ namespace MineralKingdom.Infrastructure.Migrations
                         .HasFilter("\"Status\" = 'COMPLETED'");
 
                     b.ToTable("checkout_holds", (string)null);
-                });
-
-            modelBuilder.Entity("MineralKingdom.Infrastructure.Persistence.Entities.CheckoutPayment", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("AmountCents")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("CartId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("CurrencyCode")
-                        .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)");
-
-                    b.Property<Guid>("HoldId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Provider")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.Property<string>("ProviderCheckoutId")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<string>("ProviderPaymentId")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(30)
-                        .HasColumnType("character varying(30)");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CartId");
-
-                    b.HasIndex("HoldId");
-
-                    b.HasIndex("Provider", "ProviderCheckoutId");
-
-                    b.ToTable("checkout_payments", (string)null);
                 });
 
             modelBuilder.Entity("MineralKingdom.Infrastructure.Persistence.Entities.EmailVerificationToken", b =>
@@ -728,46 +676,6 @@ namespace MineralKingdom.Infrastructure.Migrations
                     b.ToTable("password_reset_tokens", (string)null);
                 });
 
-            modelBuilder.Entity("MineralKingdom.Infrastructure.Persistence.Entities.PaymentWebhookEvent", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid?>("CheckoutPaymentId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("EventId")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<string>("PayloadJson")
-                        .IsRequired()
-                        .HasColumnType("jsonb");
-
-                    b.Property<DateTimeOffset?>("ProcessedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Provider")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.Property<DateTimeOffset>("ReceivedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CheckoutPaymentId");
-
-                    b.HasIndex("Provider", "EventId")
-                        .IsUnique()
-                        .HasDatabaseName("UX_payment_webhook_events_provider_event");
-
-                    b.ToTable("payment_webhook_events", (string)null);
-                });
-
             modelBuilder.Entity("MineralKingdom.Infrastructure.Persistence.Entities.RefreshToken", b =>
                 {
                     b.Property<Guid>("Id")
@@ -977,25 +885,6 @@ namespace MineralKingdom.Infrastructure.Migrations
                     b.Navigation("Cart");
                 });
 
-            modelBuilder.Entity("MineralKingdom.Infrastructure.Persistence.Entities.CheckoutPayment", b =>
-                {
-                    b.HasOne("MineralKingdom.Infrastructure.Persistence.Entities.Cart", "Cart")
-                        .WithMany()
-                        .HasForeignKey("CartId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("MineralKingdom.Infrastructure.Persistence.Entities.CheckoutHold", "Hold")
-                        .WithMany()
-                        .HasForeignKey("HoldId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Cart");
-
-                    b.Navigation("Hold");
-                });
-
             modelBuilder.Entity("MineralKingdom.Infrastructure.Persistence.Entities.EmailVerificationToken", b =>
                 {
                     b.HasOne("MineralKingdom.Infrastructure.Persistence.Entities.User", "User")
@@ -1048,16 +937,6 @@ namespace MineralKingdom.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("User");
-                });
-
-            modelBuilder.Entity("MineralKingdom.Infrastructure.Persistence.Entities.PaymentWebhookEvent", b =>
-                {
-                    b.HasOne("MineralKingdom.Infrastructure.Persistence.Entities.CheckoutPayment", "CheckoutPayment")
-                        .WithMany()
-                        .HasForeignKey("CheckoutPaymentId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("CheckoutPayment");
                 });
 
             modelBuilder.Entity("MineralKingdom.Infrastructure.Persistence.Entities.RefreshToken", b =>

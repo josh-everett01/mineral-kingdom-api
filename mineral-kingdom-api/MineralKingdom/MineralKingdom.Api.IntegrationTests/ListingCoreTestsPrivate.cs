@@ -9,9 +9,11 @@ using MineralKingdom.Infrastructure.Persistence.Entities;
 
 namespace MineralKingdom.Api.IntegrationTests;
 
-internal static class ListingsCoreTestsPrivate
+public sealed class ListingsCoreTestsPrivate
 {
   private sealed record IdResponse(Guid Id);
+  private readonly PostgresContainerFixture _pg;
+  public ListingsCoreTestsPrivate(PostgresContainerFixture pg) => _pg = pg;
 
   public static async Task<User> SeedOwnerAsync(TestAppFactory factory)
   {

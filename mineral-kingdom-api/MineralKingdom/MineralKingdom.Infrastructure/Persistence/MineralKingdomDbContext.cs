@@ -30,6 +30,9 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<Cart> Carts => Set<Cart>();
     public DbSet<CartLine> CartLines => Set<CartLine>();
     public DbSet<CheckoutHold> CheckoutHolds => Set<CheckoutHold>();
+    public DbSet<CheckoutPayment> CheckoutPayments => Set<CheckoutPayment>();
+    public DbSet<PaymentWebhookEvent> PaymentWebhookEvents => Set<PaymentWebhookEvent>();
+
 
 
 

@@ -18,6 +18,8 @@ public sealed class CheckoutHoldConfiguration : IEntityTypeConfiguration<Checkou
 
     b.Property(x => x.PaymentReference).HasMaxLength(200);
 
+    b.Property(x => x.ClientReturnReference).HasMaxLength(200);
+
     // Enforce: only ONE completed hold per cart (first successful payment wins)
     b.HasIndex(x => x.CartId)
       .HasDatabaseName("IX_checkout_holds_CartId_Completed")

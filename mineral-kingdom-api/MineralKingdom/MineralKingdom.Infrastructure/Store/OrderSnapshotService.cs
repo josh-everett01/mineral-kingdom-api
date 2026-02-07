@@ -12,7 +12,7 @@ public sealed class OrderSnapshotService
   public OrderSnapshotService(MineralKingdomDbContext db) => _db = db;
 
   public async Task<(bool Ok, string? Error, Guid? OrderId)> CreateDraftOrderAsync(
-    Guid userId,
+    Guid? userId,
     CreateOrderRequest req,
     CancellationToken ct)
   {
@@ -138,6 +138,7 @@ public sealed class OrderSnapshotService
     return new OrderDto(
       order.Id,
       order.UserId,
+      order.OrderNumber,
       order.SubtotalCents,
       order.DiscountTotalCents,
       order.TotalCents,

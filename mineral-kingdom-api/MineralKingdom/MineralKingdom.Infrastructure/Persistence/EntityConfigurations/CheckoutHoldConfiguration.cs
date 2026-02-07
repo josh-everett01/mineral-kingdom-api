@@ -25,5 +25,9 @@ public sealed class CheckoutHoldConfiguration : IEntityTypeConfiguration<Checkou
       .HasDatabaseName("IX_checkout_holds_CartId_Completed")
       .IsUnique()
       .HasFilter("\"Status\" = 'COMPLETED'");
+
+    b.Property(x => x.GuestEmail).HasMaxLength(320);
+    b.HasIndex(x => x.GuestEmail).HasDatabaseName("IX_checkout_holds_GuestEmail");
+
   }
 }

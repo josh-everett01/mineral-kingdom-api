@@ -53,10 +53,10 @@ public sealed class CheckoutHoldReleaseTests : IClassFixture<PostgresContainerFi
 
     // Cart B tries to buy the same offer again -> should fail now (offer disabled / listing sold)
     var cartB = await CreateGuestCartWithLineAsync(client, offerId);
-
+    const string GuestEmail = "guest@example.com";
     var startBReq = new HttpRequestMessage(HttpMethod.Post, "/api/checkout/start")
     {
-      Content = JsonContent.Create(new StartCheckoutRequest(CartId: Guid.Parse(cartB)))
+      Content = JsonContent.Create(new StartCheckoutRequest(CartId: Guid.Parse(cartB), Email: GuestEmail))
     };
     startBReq.Headers.Add("X-Cart-Id", cartB);
 
@@ -117,12 +117,14 @@ public sealed class CheckoutHoldReleaseTests : IClassFixture<PostgresContainerFi
       err.Should().Be("HOLD_EXPIRED");
     }
 
-    // Cart B should now be able to start checkout for the same offer/listing
+    // Cart B should now be able to start checkout for the same offer/listing again
     var cartB = await CreateGuestCartWithLineAsync(client, offerId);
+
+    const string GuestEmail = "guest@example.com";
 
     var startBReq = new HttpRequestMessage(HttpMethod.Post, "/api/checkout/start")
     {
-      Content = JsonContent.Create(new StartCheckoutRequest(CartId: Guid.Parse(cartB)))
+      Content = JsonContent.Create(new StartCheckoutRequest(CartId: Guid.Parse(cartB), Email: GuestEmail))
     };
     startBReq.Headers.Add("X-Cart-Id", cartB);
 
@@ -218,9 +220,10 @@ public sealed class CheckoutHoldReleaseTests : IClassFixture<PostgresContainerFi
 
   private static async Task<StartCheckoutResponse> StartCheckoutAsync(HttpClient client, string cartId)
   {
+    const string GuestEmail = "guest@example.com";
     var req = new HttpRequestMessage(HttpMethod.Post, "/api/checkout/start")
     {
-      Content = JsonContent.Create(new StartCheckoutRequest(CartId: Guid.Parse(cartId)))
+      Content = JsonContent.Create(new StartCheckoutRequest(CartId: Guid.Parse(cartId), Email: GuestEmail))
     };
     req.Headers.Add("X-Cart-Id", cartId);
 

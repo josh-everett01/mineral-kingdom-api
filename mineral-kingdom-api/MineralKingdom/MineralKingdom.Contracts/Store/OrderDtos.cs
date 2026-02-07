@@ -13,7 +13,8 @@ public sealed record OrderIdResponse(Guid Id);
 
 public sealed record OrderDto(
   Guid Id,
-  Guid UserId,
+  Guid? UserId,
+  string OrderNumber,
   int SubtotalCents,
   int DiscountTotalCents,
   int TotalCents,

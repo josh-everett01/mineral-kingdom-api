@@ -167,9 +167,10 @@ public sealed class CheckoutHoldHeartbeatTests : IClassFixture<PostgresContainer
 
   private static async Task<StartCheckoutResponse> StartCheckoutAsync(HttpClient client, string cartId)
   {
+    const string GuestEmail = "guest@example.com";
     var req = new HttpRequestMessage(HttpMethod.Post, "/api/checkout/start")
     {
-      Content = JsonContent.Create(new StartCheckoutRequest(CartId: Guid.Parse(cartId)))
+      Content = JsonContent.Create(new StartCheckoutRequest(CartId: Guid.Parse(cartId), Email: GuestEmail))
     };
     req.Headers.Add("X-Cart-Id", cartId);
 

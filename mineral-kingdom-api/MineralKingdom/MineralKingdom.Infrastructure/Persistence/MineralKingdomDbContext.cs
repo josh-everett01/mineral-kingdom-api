@@ -33,6 +33,8 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<CheckoutPayment> CheckoutPayments => Set<CheckoutPayment>();
     public DbSet<PaymentWebhookEvent> PaymentWebhookEvents => Set<PaymentWebhookEvent>();
     public DbSet<CheckoutHoldItem> CheckoutHoldItems => Set<CheckoutHoldItem>();
+    public DbSet<OrderLedgerEntry> OrderLedgerEntries => Set<OrderLedgerEntry>();
+
 
 
 
@@ -356,6 +358,12 @@ public class MineralKingdomDbContext : DbContext
             b.Property(x => x.CurrencyCode).IsRequired().HasMaxLength(3);
             b.Property(x => x.Status).IsRequired().HasMaxLength(20);
 
+            // S4-4 additions
+            b.Property(x => x.OrderNumber).IsRequired().HasMaxLength(32);
+            b.Property(x => x.GuestEmail).HasMaxLength(320);
+            b.Property(x => x.CheckoutHoldId);
+            b.Property(x => x.PaidAt);
+
             b.Property(x => x.SubtotalCents).IsRequired();
             b.Property(x => x.DiscountTotalCents).IsRequired();
             b.Property(x => x.TotalCents).IsRequired();
@@ -364,10 +372,21 @@ public class MineralKingdomDbContext : DbContext
             b.Property(x => x.UpdatedAt).IsRequired();
 
             b.HasMany(x => x.Lines)
-                .WithOne(x => x.Order!)
-                .HasForeignKey(x => x.OrderId);
+            .WithOne(x => x.Order!)
+            .HasForeignKey(x => x.OrderId);
+
+            // Indexes
+            b.HasIndex(x => x.OrderNumber)
+            .IsUnique()
+            .HasDatabaseName("UX_orders_OrderNumber");
+
+            b.HasIndex(x => x.CheckoutHoldId)
+            .IsUnique()
+            .HasFilter("\"CheckoutHoldId\" IS NOT NULL")
+            .HasDatabaseName("UX_orders_CheckoutHoldId");
 
             b.HasIndex(x => x.UserId).HasDatabaseName("IX_orders_UserId");
+            b.HasIndex(x => x.GuestEmail).HasDatabaseName("IX_orders_GuestEmail");
         });
 
         modelBuilder.Entity<OrderLine>(b =>
@@ -393,5 +412,20 @@ public class MineralKingdomDbContext : DbContext
             b.HasIndex(x => x.ListingId).HasDatabaseName("IX_order_lines_ListingId");
         });
 
+        modelBuilder.Entity<OrderLedgerEntry>(b =>
+        {
+            b.ToTable("order_ledger_entries");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.EventType).IsRequired().HasMaxLength(50);
+            b.Property(x => x.DataJson);
+            b.Property(x => x.CreatedAt).IsRequired();
+
+            b.HasOne(x => x.Order)
+                .WithMany()
+                .HasForeignKey(x => x.OrderId);
+
+            b.HasIndex(x => x.OrderId).HasDatabaseName("IX_order_ledger_entries_OrderId");
+        });
     }
 }

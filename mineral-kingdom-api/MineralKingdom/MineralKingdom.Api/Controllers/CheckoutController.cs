@@ -42,7 +42,7 @@ public sealed class CheckoutController : ControllerBase
 
     var cart = await _carts.GetOrCreateAsync(userId, cartId, now, ct);
 
-    var (ok, err, hold) = await _checkout.StartCheckoutAsync(cart, userId, now, ct);
+    var (ok, err, hold) = await _checkout.StartCheckoutAsync(cart, userId, req.Email, now, ct);
     if (!ok) return BadRequest(new { error = err });
 
     Response.Headers["X-Cart-Id"] = cart.Id.ToString();

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using MineralKingdom.Infrastructure.Store;
@@ -42,7 +43,11 @@ public sealed class OrderService
     {
       Id = Guid.NewGuid(),
       UserId = userId,
+      GuestEmail = null,
+      OrderNumber = GenerateOrderNumber(now),
+      CheckoutHoldId = null,
       Status = "DRAFT",
+      PaidAt = null,
       CurrencyCode = "USD",
       CreatedAt = now,
       UpdatedAt = now
@@ -119,5 +124,50 @@ public sealed class OrderService
     if (order.UserId != userId) return (false, "FORBIDDEN", null);
 
     return (true, null, order);
+  }
+
+  public async Task<OrderDto?> GetGuestOrderAsync(string orderNumber, string email, CancellationToken ct)
+  {
+    var order = await _db.Orders.AsNoTracking()
+      .Include(o => o.Lines)
+      .SingleOrDefaultAsync(o =>
+        o.OrderNumber == orderNumber &&
+        o.GuestEmail == email,
+        ct);
+
+    if (order is null) return null;
+
+    return new OrderDto(
+      order.Id,
+      order.UserId,
+      order.OrderNumber,
+      order.SubtotalCents,
+      order.DiscountTotalCents,
+      order.TotalCents,
+      order.CurrencyCode,
+      order.Status,
+      order.Lines
+        .OrderBy(l => l.CreatedAt)
+        .Select(l => new OrderLineDto(
+          l.Id,
+          l.OfferId,
+          l.ListingId,
+          l.UnitPriceCents,
+          l.UnitDiscountCents,
+          l.UnitFinalPriceCents,
+          l.Quantity,
+          l.LineSubtotalCents,
+          l.LineDiscountCents,
+          l.LineTotalCents
+        ))
+        .ToList()
+    );
+  }
+
+  private static string GenerateOrderNumber(DateTimeOffset now)
+  {
+    var date = now.ToString("yyyyMMdd");
+    var suffix = Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
+    return $"MK-{date}-{suffix}";
   }
 }

@@ -9,6 +9,8 @@ public sealed class CheckoutHold
 
   public Guid? UserId { get; set; } // present if member checkout
 
+  public string? GuestEmail { get; set; } // required for guest checkout, used for guest order lookup
+
   public string Status { get; set; } = "ACTIVE";
 
   public DateTimeOffset ExpiresAt { get; set; }

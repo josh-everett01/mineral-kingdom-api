@@ -4,16 +4,24 @@ public sealed class Order
 {
   public Guid Id { get; set; }
 
-  public Guid UserId { get; set; }
+  // Member orders have UserId; guest orders have GuestEmail
+  public Guid? UserId { get; set; }
+  public string? GuestEmail { get; set; }
 
-  // Snapshot totals (Definition of Done)
+  // Human-friendly order identifier (guest lookup uses this + email)
+  public string OrderNumber { get; set; } = default!;
+
+  // Idempotency: one paid order per hold
+  public Guid? CheckoutHoldId { get; set; }
+
+  // Payment-confirmed snapshot
+  public string Status { get; set; } = "DRAFT"; // DRAFT or PAID
+  public DateTimeOffset? PaidAt { get; set; }
   public int SubtotalCents { get; set; }
   public int DiscountTotalCents { get; set; }
   public int TotalCents { get; set; }
 
-  // Optional but useful for future
   public string CurrencyCode { get; set; } = "USD";
-  public string Status { get; set; } = "DRAFT";
 
   public DateTimeOffset CreatedAt { get; set; }
   public DateTimeOffset UpdatedAt { get; set; }

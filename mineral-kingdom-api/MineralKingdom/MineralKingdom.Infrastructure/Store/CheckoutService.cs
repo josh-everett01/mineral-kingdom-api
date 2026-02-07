@@ -23,11 +23,22 @@ public sealed class CheckoutService
   public async Task<(bool Ok, string? Error, CheckoutHold? Hold)> StartCheckoutAsync(
     Cart cart,
     Guid? userId,
+    string? guestEmail,
     DateTimeOffset now,
     CancellationToken ct)
   {
     if (cart.Status != CartStatuses.Active) return (false, "CART_NOT_ACTIVE", null);
     if (cart.Lines.Count == 0) return (false, "CART_EMPTY", null);
+
+    string? normalizedGuestEmail = null;
+
+    if (userId is null)
+    {
+      if (string.IsNullOrWhiteSpace(guestEmail))
+        return (false, "EMAIL_REQUIRED", null);
+
+      normalizedGuestEmail = guestEmail.Trim().ToLowerInvariant();
+    }
 
     // Resolve offer -> listing IDs for cart lines
     var offerIds = cart.Lines.Select(l => l.OfferId).Distinct().ToList();
@@ -89,6 +100,10 @@ public sealed class CheckoutService
       }
       else
       {
+        // If guest, require email match for reuse
+        if (userId is null && !string.Equals(existing.GuestEmail, normalizedGuestEmail, StringComparison.Ordinal))
+          return (false, "EMAIL_MISMATCH", null);
+
         return (true, null, existing);
       }
     }
@@ -102,11 +117,13 @@ public sealed class CheckoutService
         Id = Guid.NewGuid(),
         CartId = cart.Id,
         UserId = userId,
+        GuestEmail = normalizedGuestEmail,
         Status = CheckoutHoldStatuses.Active,
         CreatedAt = now,
         UpdatedAt = now,
         ExpiresAt = now.AddMinutes(_opts.HoldInitialMinutes),
       };
+
 
       _db.CheckoutHolds.Add(hold);
 
@@ -207,8 +224,21 @@ public sealed class CheckoutService
   DateTimeOffset now,
   CancellationToken ct)
   {
+    await using var tx = await _db.Database.BeginTransactionAsync(ct);
+
     var hold = await _db.CheckoutHolds.SingleOrDefaultAsync(h => h.Id == holdId, ct);
     if (hold is null) return (false, "HOLD_NOT_FOUND");
+
+    // Idempotency: if already completed, ensure order exists and return OK
+    if (hold.Status == CheckoutHoldStatuses.Completed)
+    {
+      var existingOrder = await _db.Orders.AsNoTracking()
+        .SingleOrDefaultAsync(o => o.CheckoutHoldId == hold.Id, ct);
+
+      if (existingOrder is not null)
+        return (true, null);
+      // If hold is completed but order missing (should be rare), we continue and attempt create.
+    }
 
     if (hold.Status != CheckoutHoldStatuses.Active)
       return (false, "HOLD_NOT_ACTIVE");
@@ -218,19 +248,20 @@ public sealed class CheckoutService
       hold.Status = CheckoutHoldStatuses.Expired;
       hold.UpdatedAt = now;
       await _db.SaveChangesAsync(ct);
+      await tx.CommitAsync(ct);
       return (false, "HOLD_EXPIRED");
     }
 
-    // Winner selection
+    // Mark hold completed
     hold.CompletedAt = now;
     hold.PaymentReference = paymentReference;
     hold.Status = CheckoutHoldStatuses.Completed;
     hold.UpdatedAt = now;
 
-    // ✅ Mark listing(s) SOLD and disable offer(s)
+    // Mark listing(s) SOLD and disable offer(s)
     await MarkHoldItemsAsSoldAsync(hold.Id, now, ct);
 
-    // Deactivate hold items (keeps your unique constraint happy)
+    // Deactivate hold items
     await DeactivateHoldItemsAsync(hold.Id, ct);
 
     // Cart becomes checked out
@@ -240,12 +271,51 @@ public sealed class CheckoutService
 
     try
     {
+      // Create paid order once per hold
+      var existing = await _db.Orders.AsNoTracking()
+        .SingleOrDefaultAsync(o => o.CheckoutHoldId == hold.Id, ct);
+
+      if (existing is null)
+      {
+        var order = await BuildPaidOrderFromHoldAsync(hold, now, ct);
+
+        _db.Orders.Add(order);
+
+        _db.OrderLedgerEntries.Add(new OrderLedgerEntry
+        {
+          Id = Guid.NewGuid(),
+          OrderId = order.Id,
+          EventType = "PAYMENT_SUCCEEDED",
+          DataJson = $"{{\"paymentReference\":\"{paymentReference}\"}}",
+          CreatedAt = now
+        });
+
+        _db.OrderLedgerEntries.Add(new OrderLedgerEntry
+        {
+          Id = Guid.NewGuid(),
+          OrderId = order.Id,
+          EventType = "ORDER_CREATED",
+          DataJson = null,
+          CreatedAt = now
+        });
+      }
+
       await _db.SaveChangesAsync(ct);
+      await tx.CommitAsync(ct);
       return (true, null);
     }
     catch (DbUpdateException ex) when (ex.InnerException is PostgresException pg && pg.SqlState == "23505")
     {
-      // Another webhook already completed a hold for this cart (first wins).
+      await tx.RollbackAsync(ct);
+
+      // If an order already exists for THIS hold, treat as webhook retry success (idempotent).
+      var existingForHold = await _db.Orders.AsNoTracking()
+        .AnyAsync(o => o.CheckoutHoldId == holdId, ct);
+
+      if (existingForHold)
+        return (true, null);
+
+      // Otherwise, someone else already completed checkout for this cart / another hold won.
       return (false, "PAYMENT_ALREADY_COMPLETED");
     }
   }
@@ -310,5 +380,91 @@ public sealed class CheckoutService
       o.EndsAt ??= now; // optional
       o.UpdatedAt = now;
     }
+  }
+
+  private async Task<Order> BuildPaidOrderFromHoldAsync(
+  CheckoutHold hold,
+  DateTimeOffset now,
+  CancellationToken ct)
+  {
+    var cart = await _db.Carts
+      .Include(c => c.Lines)
+      .SingleAsync(c => c.Id == hold.CartId, ct);
+
+    var offerIds = cart.Lines.Select(l => l.OfferId).Distinct().ToList();
+
+    var offers = await _db.StoreOffers
+      .AsNoTracking()
+      .Where(o => offerIds.Contains(o.Id) && o.DeletedAt == null)
+      .ToListAsync(ct);
+
+    if (offers.Count != offerIds.Count)
+      throw new InvalidOperationException("OFFER_NOT_FOUND_DURING_ORDER_CREATE");
+
+    var offerById = offers.ToDictionary(x => x.Id, x => x);
+
+    var order = new Order
+    {
+      Id = Guid.NewGuid(),
+      UserId = hold.UserId,
+      GuestEmail = hold.GuestEmail,
+      OrderNumber = GenerateOrderNumber(now),
+      CheckoutHoldId = hold.Id,
+      Status = "PAID",
+      PaidAt = now,
+      CurrencyCode = "USD",
+      CreatedAt = now,
+      UpdatedAt = now
+    };
+
+    foreach (var cartLine in cart.Lines)
+    {
+      var offer = offerById[cartLine.OfferId];
+
+      var unitPrice = offer.PriceCents;
+      var unitDiscountRaw = StoreOfferService.ComputeUnitDiscountCents(offer);
+      var unitDiscount = Math.Clamp(unitDiscountRaw, 0, unitPrice);
+      var unitFinal = unitPrice - unitDiscount;
+
+      var qty = cartLine.Quantity;
+
+      var lineSubtotal = checked((int)((long)unitPrice * qty));
+      var lineDiscount = checked((int)((long)unitDiscount * qty));
+      var lineTotal = checked((int)((long)unitFinal * qty));
+
+      order.Lines.Add(new OrderLine
+      {
+        Id = Guid.NewGuid(),
+        OrderId = order.Id,
+        OfferId = offer.Id,
+        ListingId = offer.ListingId,
+
+        UnitPriceCents = unitPrice,
+        UnitDiscountCents = unitDiscount,
+        UnitFinalPriceCents = unitFinal,
+
+        Quantity = qty,
+
+        LineSubtotalCents = lineSubtotal,
+        LineDiscountCents = lineDiscount,
+        LineTotalCents = lineTotal,
+
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+    }
+
+    order.SubtotalCents = checked(order.Lines.Sum(x => x.LineSubtotalCents));
+    order.DiscountTotalCents = checked(order.Lines.Sum(x => x.LineDiscountCents));
+    order.TotalCents = checked(order.Lines.Sum(x => x.LineTotalCents));
+
+    return order;
+  }
+
+  private static string GenerateOrderNumber(DateTimeOffset now)
+  {
+    var date = now.ToString("yyyyMMdd");
+    var suffix = Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
+    return $"MK-{date}-{suffix}";
   }
 }

@@ -32,7 +32,8 @@ public sealed record UpsertCartLineRequest(
 );
 
 public sealed record StartCheckoutRequest(
-  Guid? CartId // optional; for guest you’ll pass CartId; for member can be omitted
+  Guid? CartId, // 
+  string? Email
 );
 
 public sealed record StartCheckoutResponse(

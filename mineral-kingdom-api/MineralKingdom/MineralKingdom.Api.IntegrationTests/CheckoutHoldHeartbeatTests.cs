@@ -3,8 +3,10 @@ using System.Net.Http.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using MineralKingdom.Contracts.Listings;
 using MineralKingdom.Contracts.Store;
+using MineralKingdom.Infrastructure.Configuration;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using Xunit;
@@ -28,21 +30,26 @@ public sealed class CheckoutHoldHeartbeatTests : IClassFixture<PostgresContainer
     var cartId = await CreateGuestCartWithLineAsync(client, offerId);
     var start = await StartCheckoutAsync(client, cartId);
 
-    var now = DateTimeOffset.UtcNow;
-
-    // Force CreatedAt close to max window so heartbeat gets capped.
-    // With HoldMaxMinutes=30, createdAt=now-29m => cap = now+1m
-    var createdAt = now.AddMinutes(-29);
-    var expectedCap = createdAt.AddMinutes(30); // == now + 1m
+    DateTimeOffset createdAt;
+    int initialMinutes;
+    int maxMinutes;
 
     using (var scope = factory.Services.CreateScope())
     {
       var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      // TODO: replace CheckoutOptions with your actual options type
+      var opts = scope.ServiceProvider.GetRequiredService<IOptions<CheckoutOptions>>().Value;
+      initialMinutes = opts.HoldInitialMinutes;
+      maxMinutes = opts.HoldMaxMinutes;
+
       var hold = await db.CheckoutHolds.SingleAsync(h => h.Id == start.HoldId);
 
+      // Force CreatedAt close to the max window so the next heartbeat is capped
+      createdAt = DateTimeOffset.UtcNow.AddMinutes(-(maxMinutes - 1));
       hold.CreatedAt = createdAt;
-      hold.ExpiresAt = now.AddMinutes(1); // still active
-      hold.UpdatedAt = now;
+      hold.ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(1); // ensure active
+      hold.UpdatedAt = DateTimeOffset.UtcNow;
 
       await db.SaveChangesAsync();
     }
@@ -53,10 +60,14 @@ public sealed class CheckoutHoldHeartbeatTests : IClassFixture<PostgresContainer
     var dto = await hbRes.Content.ReadFromJsonAsync<CheckoutHeartbeatResponse>();
     dto.Should().NotBeNull();
 
-    // Heartbeat wants to extend by HoldInitialMinutes=10 from "now",
-    // but must cap at CreatedAt + HoldMaxMinutes (30).
-    dto!.ExpiresAt.Should().BeCloseTo(expectedCap, precision: TimeSpan.FromSeconds(10));
+    // Expected: ExpiresAt = min(now + initial, createdAt + max)
+    var now = DateTimeOffset.UtcNow;
+    var expected = Min(now.AddMinutes(initialMinutes), createdAt.AddMinutes(maxMinutes));
+
+    dto!.ExpiresAt.Should().BeCloseTo(expected, precision: TimeSpan.FromSeconds(10));
   }
+
+  private static DateTimeOffset Min(DateTimeOffset a, DateTimeOffset b) => a <= b ? a : b;
 
   [Fact]
   public async Task Heartbeat_on_expired_hold_returns_hold_expired()

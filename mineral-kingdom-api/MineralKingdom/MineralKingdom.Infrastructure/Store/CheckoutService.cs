@@ -41,7 +41,7 @@ public sealed class CheckoutService
       CartId = cart.Id,
       UserId = userId,
       Status = CheckoutHoldStatuses.Active,
-      ExpiresAt = now.AddMinutes(5),
+      ExpiresAt = now.AddMinutes(20),
       CreatedAt = now,
       UpdatedAt = now
     };
@@ -59,6 +59,39 @@ public sealed class CheckoutService
     DateTimeOffset now,
     CancellationToken ct)
   {
+    // Backward-compatible shim:
+    // keep the method name but make it safe (S4-3)
+    return await RecordClientReturnAsync(holdId, actingUserId, paymentReference, now, ct);
+  }
+
+  public async Task<(bool Ok, string? Error)> RecordClientReturnAsync(
+  Guid holdId,
+  Guid? actingUserId,
+  string paymentReference,
+  DateTimeOffset now,
+  CancellationToken ct)
+  {
+    var hold = await _db.CheckoutHolds.SingleOrDefaultAsync(h => h.Id == holdId, ct);
+    if (hold is null) return (false, "HOLD_NOT_FOUND");
+
+    // If this is a member hold, ensure the actor matches
+    if (hold.UserId.HasValue && actingUserId != hold.UserId)
+      return (false, "FORBIDDEN");
+
+    hold.ClientReturnedAt = now;
+    hold.ClientReturnReference = paymentReference;
+    hold.UpdatedAt = now;
+
+    await _db.SaveChangesAsync(ct);
+    return (true, null);
+  }
+
+  public async Task<(bool Ok, string? Error)> ConfirmPaidFromWebhookAsync(
+  Guid holdId,
+  string paymentReference,
+  DateTimeOffset now,
+  CancellationToken ct)
+  {
     var hold = await _db.CheckoutHolds.SingleOrDefaultAsync(h => h.Id == holdId, ct);
     if (hold is null) return (false, "HOLD_NOT_FOUND");
 
@@ -73,18 +106,12 @@ public sealed class CheckoutService
       return (false, "HOLD_EXPIRED");
     }
 
-    // If this is a member hold, ensure the actor matches
-    if (hold.UserId.HasValue && actingUserId != hold.UserId)
-      return (false, "FORBIDDEN");
-
-    // Winner selection:
-    // We set CompletedAt; unique index ensures only ONE per cart can succeed.
+    // Winner selection (existing approach stays the same)
     hold.CompletedAt = now;
     hold.PaymentReference = paymentReference;
     hold.Status = CheckoutHoldStatuses.Completed;
     hold.UpdatedAt = now;
 
-    // Mark cart checked out (idempotent-ish)
     var cart = await _db.Carts.SingleAsync(c => c.Id == hold.CartId, ct);
     cart.Status = CartStatuses.CheckedOut;
     cart.UpdatedAt = now;
@@ -96,7 +123,6 @@ public sealed class CheckoutService
     }
     catch (DbUpdateException ex) when (ex.InnerException is PostgresException pg && pg.SqlState == "23505")
     {
-      // unique violation -> another hold/payment already completed for this cart
       return (false, "PAYMENT_ALREADY_COMPLETED");
     }
   }

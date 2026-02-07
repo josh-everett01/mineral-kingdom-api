@@ -57,14 +57,16 @@ public sealed class CheckoutController : ControllerBase
   [HttpPost("complete")]
   [AllowAnonymous]
   public async Task<ActionResult> Complete(
-    [FromBody] CompleteCheckoutRequest req,
-    [FromHeader(Name = "X-Cart-Id")] Guid? cartIdHeader,
-    CancellationToken ct)
+  [FromBody] CompleteCheckoutRequest req,
+  [FromHeader(Name = "X-Cart-Id")] Guid? cartIdHeader,
+  CancellationToken ct)
   {
     var now = DateTimeOffset.UtcNow;
     var userId = User.Identity?.IsAuthenticated == true ? TryGetUserId() : null;
 
-    var (ok, err) = await _checkout.CompletePaymentAsync(
+    // IMPORTANT (S4-3): client redirects/returns NEVER confirm payment.
+    // This endpoint only records the return for UX/debugging.
+    var (ok, err) = await _checkout.RecordClientReturnAsync(
       req.HoldId,
       userId,
       req.PaymentReference,
@@ -77,12 +79,11 @@ public sealed class CheckoutController : ControllerBase
       {
         "HOLD_NOT_FOUND" => NotFound(new { error = err }),
         "FORBIDDEN" => Forbid(),
-        "PAYMENT_ALREADY_COMPLETED" => Conflict(new { error = err }),
         _ => BadRequest(new { error = err })
       };
     }
 
-    // If we have a cart id available, echo it back for client continuity
+    // Preserve guest cart continuity behavior
     if (cartIdHeader.HasValue)
       Response.Headers["X-Cart-Id"] = cartIdHeader.Value.ToString();
 

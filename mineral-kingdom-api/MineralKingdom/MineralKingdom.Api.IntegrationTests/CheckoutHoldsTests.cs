@@ -76,7 +76,40 @@ public sealed class CheckoutHoldsTests : IClassFixture<PostgresContainerFixture>
   }
 
   [Fact]
-  public async Task First_successful_payment_wins_second_returns_conflict()
+  public async Task Client_complete_does_not_checkout_cart_or_complete_hold()
+  {
+    await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
+    await MigrateAsync(factory);
+
+    var offerId = await SeedOfferAsync(factory, priceCents: 1000);
+    var client = factory.CreateClient();
+
+    var cartId = await CreateGuestCartWithLineAsync(client, offerId);
+    var hold = await StartCheckoutAsync(client, cartId);
+
+    // Client calls complete after provider redirect
+    var res = await CompleteCheckoutAsync(client, cartId, hold.HoldId, "client_ref_123");
+    res.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+    // Verify: cart is still ACTIVE and hold is still ACTIVE
+    using var scope = factory.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+    var cart = await db.Carts.SingleAsync(c => c.Id == Guid.Parse(cartId));
+    cart.Status.Should().Be(CartStatuses.Active);
+
+    var dbHold = await db.CheckoutHolds.SingleAsync(h => h.Id == hold.HoldId);
+    dbHold.Status.Should().Be(CheckoutHoldStatuses.Active);
+    dbHold.CompletedAt.Should().BeNull();
+    dbHold.PaymentReference.Should().BeNull();
+
+    // Optional: if you added fields, verify we recorded return
+    dbHold.ClientReturnedAt.Should().NotBeNull();
+    dbHold.ClientReturnReference.Should().Be("client_ref_123");
+  }
+
+  [Fact]
+  public async Task First_successful_payment_wins_when_confirmed_by_webhook_only()
   {
     await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
     await MigrateAsync(factory);
@@ -86,22 +119,29 @@ public sealed class CheckoutHoldsTests : IClassFixture<PostgresContainerFixture>
 
     var cartId = await CreateGuestCartWithLineAsync(client, offerId);
 
-    // Hold A (created via API)
+    // Hold A via API
     var a = await StartCheckoutAsync(client, cartId);
 
-    // Create Hold B directly in DB (ACTIVE + not expired) to simulate a race where two holds exist.
+    // Hold B inserted directly to simulate race (2 active holds exist)
     var bHoldId = await InsertSecondActiveHoldAsync(factory, Guid.Parse(cartId));
 
-    // Complete B succeeds
-    var completeB = await CompleteCheckoutAsync(client, cartId, bHoldId, "pay_B");
-    completeB.StatusCode.Should().Be(HttpStatusCode.NoContent);
+    // Webhook confirms B: should succeed
+    using (var scope = factory.Services.CreateScope())
+    {
+      var checkout = scope.ServiceProvider.GetRequiredService<MineralKingdom.Infrastructure.Store.CheckoutService>();
+      var (okB, errB) = await checkout.ConfirmPaidFromWebhookAsync(bHoldId, "wh_pay_B", DateTimeOffset.UtcNow, CancellationToken.None);
+      okB.Should().BeTrue(errB);
+    }
 
-    // Completing A should now conflict due to unique constraint (first successful payment wins)
-    var completeA = await CompleteCheckoutAsync(client, cartId, a.HoldId, "pay_A");
-    completeA.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    // Webhook confirms A: should fail due to "first paid wins"
+    using (var scope = factory.Services.CreateScope())
+    {
+      var checkout = scope.ServiceProvider.GetRequiredService<MineralKingdom.Infrastructure.Store.CheckoutService>();
+      var (okA, errA) = await checkout.ConfirmPaidFromWebhookAsync(a.HoldId, "wh_pay_A", DateTimeOffset.UtcNow, CancellationToken.None);
 
-    var err = await completeA.Content.ReadFromJsonAsync<Dictionary<string, string>>();
-    err!["error"].Should().Be("PAYMENT_ALREADY_COMPLETED");
+      okA.Should().BeFalse();
+      errA.Should().Be("PAYMENT_ALREADY_COMPLETED");
+    }
   }
 
 

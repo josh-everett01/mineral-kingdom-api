@@ -19,4 +19,7 @@ public sealed class CheckoutHold
 
   public DateTimeOffset CreatedAt { get; set; }
   public DateTimeOffset UpdatedAt { get; set; }
+  public DateTimeOffset? ClientReturnedAt { get; set; }
+  public string? ClientReturnReference { get; set; }
+
 }

@@ -96,6 +96,8 @@ public class Program
         builder.Services.Configure<PayPalOptions>(builder.Configuration.GetSection("MK_PAYPAL"));
         builder.Services.AddHttpClient("paypal");
         builder.Services.AddScoped<ICheckoutPaymentProvider, PayPalCheckoutPaymentProvider>();
+        builder.Services.Configure<CheckoutOptions>(builder.Configuration.GetSection("MK_CHECKOUT"));
+
 
 
         builder.Services.AddSingleton<IObjectStorage>(sp =>

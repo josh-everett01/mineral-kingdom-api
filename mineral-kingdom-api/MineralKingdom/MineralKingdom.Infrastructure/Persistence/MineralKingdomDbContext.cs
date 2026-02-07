@@ -32,6 +32,7 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<CheckoutHold> CheckoutHolds => Set<CheckoutHold>();
     public DbSet<CheckoutPayment> CheckoutPayments => Set<CheckoutPayment>();
     public DbSet<PaymentWebhookEvent> PaymentWebhookEvents => Set<PaymentWebhookEvent>();
+    public DbSet<CheckoutHoldItem> CheckoutHoldItems => Set<CheckoutHoldItem>();
 
 
 

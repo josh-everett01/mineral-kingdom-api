@@ -13,17 +13,19 @@ public sealed class StoreOfferService
 
   public async Task<(bool Ok, string? Error, StoreOffer? Offer)> GetAsync(Guid offerId, CancellationToken ct)
   {
-    var offer = await _db.StoreOffers.SingleOrDefaultAsync(x => x.Id == offerId && x.DeletedAt == null, ct);
-    if (offer is null) return (false, "OFFER_NOT_FOUND", null);
+    var offer = await _db.StoreOffers.SingleOrDefaultAsync(x => x.Id == offerId, ct);
+    if (offer is null || !IsOfferCurrentlyValid(offer, DateTimeOffset.UtcNow))
+      return (false, "OFFER_NOT_FOUND", null);
+
     return (true, null, offer);
   }
 
   public async Task<(bool Ok, string? Error, StoreOffer? Offer)> GetForListingAsync(Guid listingId, CancellationToken ct)
   {
-    var offer = await _db.StoreOffers
-      .SingleOrDefaultAsync(x => x.ListingId == listingId && x.DeletedAt == null, ct);
+    var offer = await _db.StoreOffers.SingleOrDefaultAsync(x => x.ListingId == listingId, ct);
+    if (offer is null || !IsOfferCurrentlyValid(offer, DateTimeOffset.UtcNow))
+      return (false, "OFFER_NOT_FOUND", null);
 
-    if (offer is null) return (false, "OFFER_NOT_FOUND", null);
     return (true, null, offer);
   }
 

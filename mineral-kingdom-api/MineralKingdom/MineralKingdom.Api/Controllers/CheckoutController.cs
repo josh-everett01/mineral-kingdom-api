@@ -89,4 +89,27 @@ public sealed class CheckoutController : ControllerBase
 
     return NoContent();
   }
+
+  [HttpPost("heartbeat")]
+  [AllowAnonymous]
+  public async Task<ActionResult<CheckoutHeartbeatResponse>> Heartbeat(
+  [FromBody] CheckoutHeartbeatRequest req,
+  CancellationToken ct)
+  {
+    var now = DateTimeOffset.UtcNow;
+    var userId = User.Identity?.IsAuthenticated == true ? TryGetUserId() : null;
+
+    var (ok, err, hold) = await _checkout.HeartbeatAsync(req.HoldId, userId, now, ct);
+    if (!ok)
+    {
+      return err switch
+      {
+        "HOLD_NOT_FOUND" => NotFound(new { error = err }),
+        "HOLD_EXPIRED" => BadRequest(new { error = err }),
+        _ => BadRequest(new { error = err })
+      };
+    }
+
+    return Ok(new CheckoutHeartbeatResponse(hold!.Id, hold.ExpiresAt));
+  }
 }

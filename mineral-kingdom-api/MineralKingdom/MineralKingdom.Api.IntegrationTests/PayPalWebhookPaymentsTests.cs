@@ -114,6 +114,70 @@ public sealed class PayPalWebhookPaymentsTests : IClassFixture<PostgresContainer
     }
   }
 
+  [Fact]
+  public async Task PayPal_webhook_completion_marks_listing_sold_disables_offer_and_deactivates_hold_items()
+  {
+    await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
+    await MigrateAsync(factory);
+
+    var offerId = await SeedOfferAsync(factory, priceCents: 1200);
+    var client = factory.CreateClient();
+
+    var cartId = await CreateGuestCartWithLineAsync(client, offerId);
+    var start = await StartCheckoutAsync(client, cartId);
+
+    var paymentId = Guid.NewGuid();
+    var orderId = "O-TEST-ORDER-SOLD-1";
+    await InsertPayPalCheckoutPaymentAsync(factory, paymentId, start.HoldId, Guid.Parse(cartId), amountCents: 1200, currency: "USD", providerCheckoutId: orderId);
+
+    var eventId = "pp_transmission_sold_1";
+    var captureId = "CAPTURE_SOLD_1";
+    var payload = PayPalCaptureCompletedJson(orderId, captureId);
+
+    var req = new HttpRequestMessage(HttpMethod.Post, "/api/webhooks/paypal")
+    {
+      Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json")
+    };
+    req.Headers.Add("PAYPAL-TRANSMISSION-ID", eventId);
+
+    var res = await client.SendAsync(req);
+    res.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    using (var scope = factory.Services.CreateScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      // Hold completes and reference set
+      var hold = await db.CheckoutHolds.SingleAsync(h => h.Id == start.HoldId);
+      hold.Status.Should().Be(CheckoutHoldStatuses.Completed);
+      hold.PaymentReference.Should().Be(captureId);
+
+      // Hold items -> source of truth for what got sold
+      var holdItems = await db.CheckoutHoldItems
+        .AsNoTracking()
+        .Where(i => i.HoldId == start.HoldId)
+        .Select(i => new { i.ListingId, i.OfferId, i.IsActive })
+        .ToListAsync();
+
+      holdItems.Should().NotBeEmpty();
+      holdItems.All(x => x.IsActive == false).Should().BeTrue(); // deactivated
+
+      var listingIds = holdItems.Select(x => x.ListingId).Distinct().ToList();
+      var offerIds = holdItems.Select(x => x.OfferId).Distinct().ToList();
+
+      // Listing(s) SOLD + qty 0
+      var listings = await db.Listings.Where(l => listingIds.Contains(l.Id)).ToListAsync();
+      listings.Should().NotBeEmpty();
+      listings.All(l => l.Status == ListingStatuses.Sold).Should().BeTrue();
+      listings.All(l => l.QuantityAvailable == 0).Should().BeTrue();
+
+      // Offer(s) disabled
+      var offers = await db.StoreOffers.Where(o => offerIds.Contains(o.Id) && o.DeletedAt == null).ToListAsync();
+      offers.Should().NotBeEmpty();
+      offers.All(o => o.IsActive == false).Should().BeTrue();
+    }
+  }
+
   // ---------------- helpers ----------------
 
   private static async Task MigrateAsync(TestAppFactory factory)
@@ -229,8 +293,6 @@ public sealed class PayPalWebhookPaymentsTests : IClassFixture<PostgresContainer
 
   private static string PayPalCaptureCompletedJson(string orderId, string captureId)
   {
-    // Minimal fields needed by ProcessPayPalAsync:
-    // event_type, resource.id, resource.supplementary_data.related_ids.order_id
     return $$"""
 {
   "id": "WH-TEST",

@@ -97,8 +97,7 @@ public class Program
         builder.Services.AddHttpClient("paypal");
         builder.Services.AddScoped<ICheckoutPaymentProvider, PayPalCheckoutPaymentProvider>();
         builder.Services.Configure<CheckoutOptions>(builder.Configuration.GetSection("MK_CHECKOUT"));
-
-
+        builder.Services.AddScoped<MineralKingdom.Infrastructure.Auctions.AuctionStateMachineService>();
 
         builder.Services.AddSingleton<IObjectStorage>(sp =>
         {

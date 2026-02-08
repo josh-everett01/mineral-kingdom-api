@@ -8,11 +8,16 @@ namespace MineralKingdom.Infrastructure.Auctions;
 public sealed class AuctionStateMachineService
 {
   private readonly MineralKingdomDbContext _db;
+  private readonly AuctionBiddingService _bidding;
 
   // Keep these as constants so later stories can configure via options
   private static readonly TimeSpan ClosingWindowDuration = TimeSpan.FromMinutes(10);
 
-  public AuctionStateMachineService(MineralKingdomDbContext db) => _db = db;
+  public AuctionStateMachineService(MineralKingdomDbContext db, AuctionBiddingService bidding)
+  {
+    _db = db;
+    _bidding = bidding;
+  }
 
   /// <summary>
   /// Advances a single auction forward if server rules apply.
@@ -74,6 +79,11 @@ public sealed class AuctionStateMachineService
       });
 
       await _db.SaveChangesAsync(ct);
+
+      // Inject delayed bids immediately at start of closing
+      var (ok, err) = await _bidding.InjectDelayedBidsAtClosingStartAsync(a.Id, now, ct);
+      if (!ok) return (true, err); // state already changed; return err for visibility
+
       return (true, null);
     }
 

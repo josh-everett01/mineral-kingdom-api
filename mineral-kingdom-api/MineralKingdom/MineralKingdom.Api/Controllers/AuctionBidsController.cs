@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MineralKingdom.Api.Security;
+using MineralKingdom.Infrastructure.Auctions;
 
 namespace MineralKingdom.Api.Controllers;
 
@@ -8,15 +9,37 @@ namespace MineralKingdom.Api.Controllers;
 [Route("api/auctions/{auctionId:guid}/bids")]
 public sealed class AuctionBidsController : ControllerBase
 {
-  // Placeholder endpoint to prove server-side verification enforcement.
-  // The full auction module will implement bidding rules in a later story.
+  private readonly AuctionBiddingService _bids;
 
-  public sealed record PlaceBidRequest(int MaxBid, string Mode);
+  public AuctionBidsController(AuctionBiddingService bids) => _bids = bids;
+
+  public sealed record PlaceBidRequest(int MaxBidCents, string Mode);
+
+  public sealed record PlaceBidResponse(
+    int CurrentPriceCents,
+    Guid? LeaderUserId,
+    bool ReserveMet
+  );
 
   [HttpPost]
   [Authorize(Policy = AuthorizationPolicies.EmailVerified)]
-  public ActionResult PlaceBid([FromRoute] Guid auctionId, [FromBody] PlaceBidRequest req)
+  public async Task<ActionResult<PlaceBidResponse>> PlaceBid(
+    [FromRoute] Guid auctionId,
+    [FromBody] PlaceBidRequest req,
+    CancellationToken ct)
   {
-    return StatusCode(StatusCodes.Status501NotImplemented);
+    var userId = User.GetUserId();
+    var now = DateTimeOffset.UtcNow;
+
+    var result = await _bids.PlaceBidAsync(auctionId, userId, req.MaxBidCents, req.Mode, now, ct);
+
+    if (!result.Ok)
+      return BadRequest(new { error = result.Error });
+
+    return Ok(new PlaceBidResponse(
+      CurrentPriceCents: result.CurrentPriceCents!.Value,
+      LeaderUserId: result.LeaderUserId,
+      ReserveMet: result.ReserveMet!.Value
+    ));
   }
 }

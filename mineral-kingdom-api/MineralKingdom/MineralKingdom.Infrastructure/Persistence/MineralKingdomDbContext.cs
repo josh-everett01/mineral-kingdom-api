@@ -23,7 +23,6 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<Mineral> Minerals => Set<Mineral>();
     public DbSet<Listing> Listings => Set<Listing>();
     public DbSet<ListingMedia> ListingMedia => Set<ListingMedia>();
-    public DbSet<Auction> Auctions => Set<Auction>();
     public DbSet<StoreOffer> StoreOffers => Set<StoreOffer>();
     public DbSet<Order> Orders => Set<Order>();
     public DbSet<OrderLine> OrderLines => Set<OrderLine>();
@@ -34,6 +33,10 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<PaymentWebhookEvent> PaymentWebhookEvents => Set<PaymentWebhookEvent>();
     public DbSet<CheckoutHoldItem> CheckoutHoldItems => Set<CheckoutHoldItem>();
     public DbSet<OrderLedgerEntry> OrderLedgerEntries => Set<OrderLedgerEntry>();
+    public DbSet<Auction> Auctions => Set<Auction>();
+    public DbSet<AuctionMaxBid> AuctionMaxBids => Set<AuctionMaxBid>();
+    public DbSet<AuctionBidEvent> AuctionBidEvents => Set<AuctionBidEvent>();
+
 
 
 
@@ -320,35 +323,83 @@ public class MineralKingdomDbContext : DbContext
             b.ToTable("auctions");
             b.HasKey(x => x.Id);
 
-            b.Property(x => x.Status).IsRequired().HasMaxLength(20);
+            b.Property(x => x.Status).IsRequired().HasMaxLength(30).HasDefaultValue("DRAFT");
+
+            b.Property(x => x.StartingPriceCents).IsRequired();
+            b.Property(x => x.ReservePriceCents);
+            b.Property(x => x.StartTime);
+            b.Property(x => x.CloseTime).IsRequired();
+            b.Property(x => x.ClosingWindowEnd);
+
+            b.Property(x => x.CurrentPriceCents).IsRequired();
+            b.Property(x => x.CurrentLeaderUserId);
+            b.Property(x => x.CurrentLeaderMaxCents);
+            b.Property(x => x.BidCount).IsRequired().HasDefaultValue(0); ;
+            b.Property(x => x.ReserveMet).IsRequired().HasDefaultValue(false);
+            b.Property(x => x.RelistOfAuctionId);
 
             b.Property(x => x.CreatedAt).IsRequired();
             b.Property(x => x.UpdatedAt).IsRequired();
 
             b.HasIndex(x => x.ListingId).HasDatabaseName("IX_auctions_ListingId");
-            b.HasIndex(x => new { x.ListingId, x.Status }).HasDatabaseName("IX_auctions_ListingId_Status");
+            b.HasIndex(x => new { x.Status, x.CloseTime }).HasDatabaseName("IX_auctions_Status_CloseTime");
+            b.HasIndex(x => x.RelistOfAuctionId).HasDatabaseName("IX_auctions_RelistOfAuctionId");
+        });
+
+        modelBuilder.Entity<AuctionMaxBid>(b =>
+        {
+            b.ToTable("auction_max_bids");
+            b.HasKey(x => new { x.AuctionId, x.UserId });
+
+            b.Property(x => x.BidType).IsRequired().HasMaxLength(20);
+            b.Property(x => x.MaxBidCents).IsRequired();
+            b.Property(x => x.ReceivedAt).IsRequired();
+
+            b.HasOne(x => x.Auction)
+                .WithMany()
+                .HasForeignKey(x => x.AuctionId);
+
+            b.HasIndex(x => new { x.AuctionId, x.MaxBidCents, x.ReceivedAt })
+                .HasDatabaseName("IX_auction_max_bids_Auction_Max_Received");
+        });
+
+        modelBuilder.Entity<AuctionBidEvent>(b =>
+        {
+            b.ToTable("auction_bid_events");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.EventType).IsRequired().HasMaxLength(50);
+            b.Property(x => x.DataJson);
+            b.Property(x => x.ServerReceivedAt).IsRequired();
+
+            b.HasOne(x => x.Auction)
+                .WithMany()
+                .HasForeignKey(x => x.AuctionId);
+
+            b.HasIndex(x => new { x.AuctionId, x.ServerReceivedAt })
+                .HasDatabaseName("IX_auction_bid_events_Auction_Time");
         });
 
         modelBuilder.Entity<StoreOffer>(b =>
-{
-    b.ToTable("store_offers");
-    b.HasKey(x => x.Id);
+        {
+            b.ToTable("store_offers");
+            b.HasKey(x => x.Id);
 
-    b.Property(x => x.DiscountType).IsRequired().HasMaxLength(20);
+            b.Property(x => x.DiscountType).IsRequired().HasMaxLength(20);
 
-    b.Property(x => x.PriceCents).IsRequired();
-    b.Property(x => x.DiscountCents);
-    b.Property(x => x.DiscountPercentBps);
+            b.Property(x => x.PriceCents).IsRequired();
+            b.Property(x => x.DiscountCents);
+            b.Property(x => x.DiscountPercentBps);
 
-    b.Property(x => x.IsActive).HasDefaultValue(true);
+            b.Property(x => x.IsActive).HasDefaultValue(true);
 
-    b.Property(x => x.CreatedAt).IsRequired();
-    b.Property(x => x.UpdatedAt).IsRequired();
-    b.Property(x => x.DeletedAt);
+            b.Property(x => x.CreatedAt).IsRequired();
+            b.Property(x => x.UpdatedAt).IsRequired();
+            b.Property(x => x.DeletedAt);
 
-    b.HasIndex(x => x.ListingId).HasDatabaseName("IX_store_offers_ListingId");
-    b.HasIndex(x => new { x.ListingId, x.IsActive }).HasDatabaseName("IX_store_offers_ListingId_IsActive");
-});
+            b.HasIndex(x => x.ListingId).HasDatabaseName("IX_store_offers_ListingId");
+            b.HasIndex(x => new { x.ListingId, x.IsActive }).HasDatabaseName("IX_store_offers_ListingId_IsActive");
+        });
 
         modelBuilder.Entity<Order>(b =>
         {

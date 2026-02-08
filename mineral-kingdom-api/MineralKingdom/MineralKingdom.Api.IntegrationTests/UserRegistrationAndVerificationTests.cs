@@ -71,7 +71,7 @@ public sealed class UserRegistrationAndVerificationTests
       var req = new HttpRequestMessage(HttpMethod.Post, $"/api/auctions/{auctionId}/bids");
       req.Headers.Add("X-Test-UserId", reg.UserId.ToString());
       req.Headers.Add("X-Test-EmailVerified", "false");
-      req.Content = JsonContent.Create(new { maxBid = 10, mode = "IMMEDIATE" });
+      req.Content = JsonContent.Create(new { maxBidCents = 1000, mode = "IMMEDIATE" });
       return req;
     }
 
@@ -87,7 +87,12 @@ public sealed class UserRegistrationAndVerificationTests
 
     // 4) Bid again => 501
     var bidResp2 = await client.SendAsync(CreateBidRequest());
-    bidResp2.StatusCode.Should().Be(HttpStatusCode.NotImplemented);
+    bidResp2.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+    var body = await bidResp2.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+    body.Should().NotBeNull();
+    body!["error"].Should().Be("AUCTION_NOT_FOUND");
+
   }
 
   [Fact]

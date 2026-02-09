@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Auth;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
+using MineralKingdom.Worker.Jobs;
 
 namespace MineralKingdom.Worker.Cron;
 
@@ -11,6 +12,7 @@ public sealed class CronSweepEnqueuer
 {
   public const string JobSanitySweepType = "JOB_SANITY_SWEEP";
   public const string JobRetrySweepType = "JOB_RETRY_SWEEP";
+
 
   private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -23,12 +25,12 @@ public sealed class CronSweepEnqueuer
 
   public async Task EnqueueDueSweepsAsync(DateTimeOffset now, CancellationToken ct = default)
   {
-    // 60-second buckets (per story)
     var bucketStart = TruncateToBucket(now, bucketSeconds: 60);
     var bucketIso = bucketStart.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:00'Z'");
 
     await EnqueueOncePerBucketAsync(JobSanitySweepType, bucketIso, now, ct);
     await EnqueueOncePerBucketAsync(JobRetrySweepType, bucketIso, now, ct);
+    await EnqueueOncePerBucketAsync(JobTypes.AuctionClosingSweep, bucketIso, now, ct);
   }
 
   private async Task EnqueueOncePerBucketAsync(string jobType, string bucketIso, DateTimeOffset runAt, CancellationToken ct)

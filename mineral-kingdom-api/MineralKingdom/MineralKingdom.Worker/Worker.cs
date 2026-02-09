@@ -9,6 +9,7 @@ using MineralKingdom.Infrastructure.Security.Jobs;
 using MineralKingdom.Worker.Jobs;
 using System.Diagnostics;
 using MineralKingdom.Worker.Cron;
+using MineralKingdom.Contracts.Auctions;
 
 
 namespace MineralKingdom.Worker;
@@ -22,6 +23,8 @@ public sealed class Worker : BackgroundService
     private readonly TimeSpan _pollInterval = TimeSpan.FromSeconds(2);
     private readonly TimeSpan _lockTimeout = TimeSpan.FromMinutes(5);
     private const int BatchSize = 10;
+    private readonly TimeSpan _heartbeatInterval = TimeSpan.FromSeconds(60);
+    private DateTimeOffset _lastHeartbeatAt = DateTimeOffset.MinValue;
 
     public Worker(IServiceProvider services, ILogger<Worker> logger)
     {
@@ -31,12 +34,24 @@ public sealed class Worker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("MineralKingdom.Worker started. WorkerId={WorkerId}", _workerId);
+        using var workerScope = _logger.BeginScope(new Dictionary<string, object?>
+        {
+            ["WorkerId"] = _workerId
+        });
+
+        _logger.LogInformation("🟢 worker.started env={Env} pollSeconds={PollSeconds} batch={Batch} lockMinutes={LockMinutes}",
+            Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"),
+            _pollInterval.TotalSeconds,
+            BatchSize,
+            _lockTimeout.TotalMinutes);
+
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            var now = DateTimeOffset.UtcNow;
             try
             {
+                await MaybeLogHeartbeatAsync(now, stoppingToken);
                 await WorkOnceAsync(stoppingToken);
             }
             catch (Exception ex)
@@ -62,6 +77,7 @@ public sealed class Worker : BackgroundService
 
         registry.Register(scope.ServiceProvider.GetRequiredService<JobSanitySweepHandler>());
         registry.Register(scope.ServiceProvider.GetRequiredService<JobRetrySweepHandler>());
+        registry.Register(scope.ServiceProvider.GetRequiredService<AuctionClosingSweepJob>());
 
         var now = DateTimeOffset.UtcNow;
         var claimed = await claimer.ClaimDueAsync(_workerId, BatchSize, _lockTimeout, now, ct);
@@ -75,11 +91,77 @@ public sealed class Worker : BackgroundService
         }
     }
 
+    private async Task MaybeLogHeartbeatAsync(DateTimeOffset now, CancellationToken ct)
+    {
+        if (_lastHeartbeatAt != DateTimeOffset.MinValue &&
+            now - _lastHeartbeatAt < _heartbeatInterval)
+            return;
+
+        _lastHeartbeatAt = now;
+
+        await using var scope = _services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+        // Jobs summary (cheap + super helpful)
+        var jobsDue = await db.Jobs.AsNoTracking()
+            .CountAsync(j =>
+                j.Status == JobStatuses.Pending &&
+                j.RunAt <= now,
+                ct);
+
+        var jobsRunning = await db.Jobs.AsNoTracking()
+            .CountAsync(j => j.Status == JobStatuses.Running, ct);
+
+        var jobsDeadLetter = await db.Jobs.AsNoTracking()
+            .CountAsync(j => j.Status == JobStatuses.DeadLetter, ct);
+
+        // Auctions summary
+        var live = await db.Auctions.AsNoTracking()
+            .CountAsync(a => a.Status == "LIVE", ct);
+
+        var closing = await db.Auctions.AsNoTracking()
+            .CountAsync(a => a.Status == "CLOSING", ct);
+
+        var active = live + closing;
+
+        var waitingPayment = await db.Auctions.AsNoTracking()
+            .CountAsync(a => a.Status == "CLOSED_WAITING_ON_PAYMENT", ct);
+
+        // Due signals (matches your state machine logic)
+        var closeDue = await db.Auctions.AsNoTracking()
+            .CountAsync(a => a.Status == "LIVE" && a.CloseTime <= now, ct);
+
+        var closingWindowDue = await db.Auctions.AsNoTracking()
+            .CountAsync(a =>
+                a.Status == "CLOSING" &&
+                a.ClosingWindowEnd != null &&
+                a.ClosingWindowEnd <= now,
+                ct);
+
+        // Relist due (matches your RelistDelay logic; keep it in sync)
+        var relistDelay = TimeSpan.FromMinutes(10);
+        var relistDue = await db.Auctions.AsNoTracking()
+            .CountAsync(a =>
+                a.Status == "CLOSED_NOT_SOLD" &&
+                a.RelistOfAuctionId == null &&
+                a.ReservePriceCents != null &&
+                a.ReserveMet == false &&
+                a.UpdatedAt <= now.Subtract(relistDelay),
+                ct);
+
+        _logger.LogInformation(
+        "💓 hb now={NowUtc:o} jobs(due={JobsDue} run={JobsRun} dlq={JobsDlq}) auctions(active={AActive} live={ALive} closing={AClosing} waitPay={AWait}) due(close={CloseDue} closeWin={CloseWinDue} relist={RelistDue})",
+        now, jobsDue, jobsRunning, jobsDeadLetter,
+        active, live, closing, waitingPayment,
+        closeDue, closingWindowDue, relistDue);
+
+    }
+
     private async Task ExecuteOneAsync(
-      MineralKingdomDbContext db,
-      JobHandlerRegistry registry,
-      Guid jobId,
-      CancellationToken ct)
+        MineralKingdomDbContext db,
+        JobHandlerRegistry registry,
+        Guid jobId,
+        CancellationToken ct)
     {
         var job = await db.Jobs.SingleAsync(x => x.Id == jobId, ct);
 
@@ -96,6 +178,13 @@ public sealed class Worker : BackgroundService
             await FailAsync(db, job, "NO_HANDLER_FOR_TYPE", deadLetter: true, ct);
             return;
         }
+        using var jobScope = _logger.BeginScope(new Dictionary<string, object?>
+        {
+            ["JobId"] = job.Id,
+            ["JobType"] = job.Type
+        });
+
+        var sw = Stopwatch.StartNew();
 
         try
         {
@@ -112,9 +201,13 @@ public sealed class Worker : BackgroundService
             job.UpdatedAt = DateTimeOffset.UtcNow;
 
             await db.SaveChangesAsync(ct);
+
         }
         catch (Exception ex)
         {
+            _logger.LogWarning(ex, "❌ job.fail ms={ElapsedMs} attempts={Attempts}/{MaxAttempts}",
+            sw.ElapsedMilliseconds, job.Attempts, job.MaxAttempts);
+
             // Retry / DLQ behavior (shared policy)
             var now = DateTimeOffset.UtcNow;
             JobFailureProcessor.ApplyFailure(job, now, ex.Message, includeJitter: true);
@@ -148,4 +241,5 @@ public sealed class Worker : BackgroundService
         }
         await db.SaveChangesAsync(ct);
     }
+
 }

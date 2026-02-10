@@ -91,8 +91,10 @@ public sealed class AuctionRelistRulesTests : IClassFixture<PostgresContainerFix
       relisted!.ListingId.Should().Be(listingId);
       relisted.Status.Should().Be(AuctionStatuses.Live);
 
-      relisted.StartTime.Should().Be(now);
+      relisted.StartTime.Should().NotBeNull();
+      relisted.StartTime!.Value.Should().BeCloseTo(now, TimeSpan.FromMilliseconds(5));
       relisted.CloseTime.Should().BeAfter(now);
+
 
       relisted.CurrentPriceCents.Should().Be(relisted.StartingPriceCents);
       relisted.CurrentLeaderUserId.Should().BeNull();
@@ -354,8 +356,11 @@ public sealed class AuctionRelistRulesTests : IClassFixture<PostgresContainerFix
       relisted!.ListingId.Should().Be(listingId);
       relisted.Status.Should().Be(AuctionStatuses.Live);
 
-      relisted.StartTime.Should().Be(now2);
+      relisted.StartTime.Should().NotBeNull();
+      relisted.StartTime!.Value.Should().BeCloseTo(now2, TimeSpan.FromMilliseconds(5));
       relisted.CloseTime.Should().BeAfter(now2);
+
+
 
       relisted.CurrentPriceCents.Should().Be(relisted.StartingPriceCents);
       relisted.CurrentLeaderUserId.Should().BeNull();

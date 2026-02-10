@@ -51,8 +51,10 @@ public sealed class AuctionAdminService
 
       StartingPriceCents = req.StartingPriceCents,
       ReservePriceCents = req.ReservePriceCents,
+
       StartTime = null,
       CloseTime = req.CloseTime,
+
       ClosingWindowEnd = null,
 
       CurrentPriceCents = req.StartingPriceCents,
@@ -62,10 +64,11 @@ public sealed class AuctionAdminService
       ReserveMet = false,
 
       RelistOfAuctionId = null,
-
       CreatedAt = now,
       UpdatedAt = now
     };
+    if (req.CloseTime <= now) return (false, "CLOSE_TIME_IN_PAST", null);
+
 
     _db.Auctions.Add(auction);
 
@@ -99,10 +102,20 @@ public sealed class AuctionAdminService
         string.Equals(listing.Status, ListingStatuses.Archived, StringComparison.OrdinalIgnoreCase))
       return (false, "LISTING_NOT_FOR_AUCTION");
 
+    // Defensive: normalize derived fields when starting
+    auction.CurrentPriceCents = auction.StartingPriceCents;
+    auction.CurrentLeaderUserId = null;
+    auction.CurrentLeaderMaxCents = null;
+    auction.BidCount = 0;
+    auction.ReserveMet = false;
+    auction.ClosingWindowEnd = null;
+
+
     var from = auction.Status;
     auction.Status = AuctionStatuses.Live;
     auction.StartTime = now;
     auction.UpdatedAt = now;
+
 
     _db.AuctionBidEvents.Add(new AuctionBidEvent
     {
@@ -110,7 +123,7 @@ public sealed class AuctionAdminService
       AuctionId = auction.Id,
       UserId = null,
       EventType = "STATUS_CHANGED",
-      DataJson = $"{{\"from\":\"{from}\",\"to\":\"{auction.Status}\"}}",
+      DataJson = $"{{\"from\":\"{from}\",\"to\":\"{auction.Status}\",\"reason\":\"ADMIN_START\"}}",
       ServerReceivedAt = now
     });
 

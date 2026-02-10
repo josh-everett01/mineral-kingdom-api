@@ -99,6 +99,9 @@ public class Program
         builder.Services.Configure<CheckoutOptions>(builder.Configuration.GetSection("MK_CHECKOUT"));
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Auctions.AuctionStateMachineService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Auctions.AuctionBiddingService>();
+        builder.Services.AddScoped<MineralKingdom.Infrastructure.Auctions.AuctionStateMachineService>();
+        builder.Services.AddScoped<MineralKingdom.Infrastructure.Auctions.AuctionAdminService>();
+
 
 
         builder.Services.AddSingleton<IObjectStorage>(sp =>

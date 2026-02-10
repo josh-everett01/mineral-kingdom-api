@@ -334,7 +334,7 @@ public class MineralKingdomDbContext : DbContext
             b.Property(x => x.CurrentPriceCents).IsRequired();
             b.Property(x => x.CurrentLeaderUserId);
             b.Property(x => x.CurrentLeaderMaxCents);
-            b.Property(x => x.BidCount).IsRequired().HasDefaultValue(0); ;
+            b.Property(x => x.BidCount).IsRequired().HasDefaultValue(0);
             b.Property(x => x.ReserveMet).IsRequired().HasDefaultValue(false);
             b.Property(x => x.RelistOfAuctionId);
 
@@ -343,7 +343,11 @@ public class MineralKingdomDbContext : DbContext
 
             b.HasIndex(x => x.ListingId).HasDatabaseName("IX_auctions_ListingId");
             b.HasIndex(x => new { x.Status, x.CloseTime }).HasDatabaseName("IX_auctions_Status_CloseTime");
-            b.HasIndex(x => x.RelistOfAuctionId).HasDatabaseName("IX_auctions_RelistOfAuctionId");
+            b.HasIndex(x => new { x.Status, x.UpdatedAt })
+            .HasDatabaseName("IX_auctions_Status_UpdatedAt");
+            b.HasIndex(x => x.RelistOfAuctionId)
+            .IsUnique()
+            .HasDatabaseName("UX_auctions_RelistOfAuctionId");
         });
 
         modelBuilder.Entity<AuctionMaxBid>(b =>

@@ -34,6 +34,15 @@ public sealed class OrdersController : ControllerBase
   }
 
   [Authorize]
+  [HttpGet]
+  public async Task<ActionResult<List<OrderDto>>> ListMine(CancellationToken ct)
+  {
+    var userId = User.GetUserId();
+    var orders = await _svc.ListForUserAsync(userId, ct);
+    return Ok(orders);
+  }
+
+  [Authorize]
   [HttpGet("{id:guid}")]
   public async Task<ActionResult<OrderDto>> Get(Guid id, CancellationToken ct)
   {

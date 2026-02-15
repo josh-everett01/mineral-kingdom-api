@@ -8,7 +8,7 @@ public sealed class OrderLine
   public Order? Order { get; set; }
 
   // What was purchased (offer/listing)
-  public Guid OfferId { get; set; }
+  public Guid? OfferId { get; set; }
   public Guid ListingId { get; set; }
 
   // Snapshot of pricing at time of order

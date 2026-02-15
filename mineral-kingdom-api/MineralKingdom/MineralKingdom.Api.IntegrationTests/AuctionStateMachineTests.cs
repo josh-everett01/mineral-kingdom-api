@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using MineralKingdom.Contracts.Auctions;
+using MineralKingdom.Contracts.Auth;
 using MineralKingdom.Contracts.Listings;
 using MineralKingdom.Infrastructure.Auctions;
 using MineralKingdom.Infrastructure.Persistence;
@@ -158,10 +159,25 @@ public sealed class AuctionStateMachineTests : IClassFixture<PostgresContainerFi
     var now = DateTimeOffset.UtcNow;
 
     Guid auctionId;
+    Guid winnerUserId;
 
     using (var scope = factory.Services.CreateScope())
     {
       var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      // Seed a winner user (sold auction must have a leader now that we create an unpaid order)
+      winnerUserId = Guid.NewGuid();
+
+      db.Users.Add(new User
+      {
+        Id = winnerUserId,
+        Email = $"winner-{winnerUserId:N}@example.com",
+        PasswordHash = "x",
+        EmailVerified = true,
+        Role = UserRoles.User,
+        CreatedAt = now.UtcDateTime,
+        UpdatedAt = now.UtcDateTime
+      });
 
       var listing = new Listing
       {
@@ -187,6 +203,11 @@ public sealed class AuctionStateMachineTests : IClassFixture<PostgresContainerFi
         CurrentPriceCents = 1300,
         BidCount = 3,
         ReserveMet = true,
+
+        // NEW: winner fields required for sold close → unpaid order
+        CurrentLeaderUserId = winnerUserId,
+        CurrentLeaderMaxCents = 1300,
+
         CreatedAt = now,
         UpdatedAt = now
       };
@@ -206,10 +227,27 @@ public sealed class AuctionStateMachineTests : IClassFixture<PostgresContainerFi
     using (var scope = factory.Services.CreateScope())
     {
       var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
       var a = await db.Auctions.SingleAsync(x => x.Id == auctionId);
       a.Status.Should().Be(AuctionStatuses.ClosedWaitingOnPayment);
+
+      // Optional: assert the unpaid auction order was created (core S5-4 behavior)
+      var order = await db.Orders
+        .Include(o => o.Lines)
+        .SingleOrDefaultAsync(o => o.AuctionId == auctionId);
+
+      order.Should().NotBeNull();
+      order!.SourceType.Should().Be("AUCTION");
+      order.Status.Should().Be("AWAITING_PAYMENT");
+      order.UserId.Should().Be(winnerUserId);
+      order.PaymentDueAt.Should().NotBeNull();
+      order.PaymentDueAt!.Value.Should().BeAfter(now.AddHours(47)); // loose check
+      order.Lines.Should().HaveCount(1);
+      order.Lines[0].OfferId.Should().BeNull();
+      order.Lines[0].ListingId.Should().Be(a.ListingId);
     }
   }
+
 
   private static async Task MigrateAsync(TestAppFactory factory)
   {

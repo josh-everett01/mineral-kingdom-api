@@ -15,6 +15,9 @@ public sealed record OrderDto(
   Guid Id,
   Guid? UserId,
   string OrderNumber,
+  string SourceType,
+  Guid? AuctionId,
+  DateTimeOffset? PaymentDueAt,
   int SubtotalCents,
   int DiscountTotalCents,
   int TotalCents,
@@ -25,7 +28,7 @@ public sealed record OrderDto(
 
 public sealed record OrderLineDto(
   Guid Id,
-  Guid OfferId,
+  Guid? OfferId,
   Guid ListingId,
   int UnitPriceCents,
   int UnitDiscountCents,
@@ -35,3 +38,4 @@ public sealed record OrderLineDto(
   int LineDiscountCents,
   int LineTotalCents
 );
+

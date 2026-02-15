@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Auctions;
+using MineralKingdom.Infrastructure.Orders;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using Npgsql;
@@ -11,10 +12,14 @@ public sealed class AuctionStateMachineService
   private readonly MineralKingdomDbContext _db;
   private readonly AuctionBiddingService _bidding;
 
+
+
   // Keep these as constants so later stories can configure via options
   private static readonly TimeSpan ClosingWindowDuration = TimeSpan.FromMinutes(10);
   private static readonly TimeSpan RelistDelay = TimeSpan.FromMinutes(10);
   private static readonly TimeSpan DefaultAuctionDuration = TimeSpan.FromHours(24);
+  private static readonly TimeSpan DefaultAuctionPaymentWindow = TimeSpan.FromHours(48);
+
 
 
   public AuctionStateMachineService(MineralKingdomDbContext db, AuctionBiddingService bidding)
@@ -204,6 +209,7 @@ public sealed class AuctionStateMachineService
       else
       {
         locked.Status = AuctionStatuses.ClosedWaitingOnPayment;
+        await EnsureUnpaidAuctionOrderExistsAsync(locked, now, ct);
       }
 
       locked.UpdatedAt = now;
@@ -218,10 +224,19 @@ public sealed class AuctionStateMachineService
         ServerReceivedAt = now
       });
 
-      await _db.SaveChangesAsync(ct);
-      await tx.CommitAsync(ct);
-
-      return (true, null);
+      try
+      {
+        await _db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return (true, null);
+      }
+      catch (DbUpdateException ex) when (ex.InnerException is PostgresException pg && pg.SqlState == PostgresErrorCodes.UniqueViolation)
+      {
+        // If the unique violation is from UX_orders_AuctionId due to a race,
+        // treat as idempotent success.
+        await tx.RollbackAsync(ct);
+        return (true, null);
+      }
     }
 
     return (false, null);
@@ -345,5 +360,76 @@ public sealed class AuctionStateMachineService
       await tx.RollbackAsync(ct);
       return (false, null);
     }
+  }
+
+  private async Task EnsureUnpaidAuctionOrderExistsAsync(Auction locked, DateTimeOffset now, CancellationToken ct)
+  {
+    // Only for sold path; winner must exist
+    if (locked.CurrentLeaderUserId is null)
+      throw new InvalidOperationException("Sold auction must have a winner (CurrentLeaderUserId).");
+
+    // Idempotency: one order per auction (also enforced by UX_orders_AuctionId)
+    var exists = await _db.Orders.AnyAsync(o => o.AuctionId == locked.Id, ct);
+    if (exists) return;
+
+    var total = locked.CurrentPriceCents;
+    if (total <= 0)
+      throw new InvalidOperationException("Sold auction must have a positive CurrentPriceCents.");
+
+    var orderId = Guid.NewGuid();
+
+    var order = new Order
+    {
+      Id = orderId,
+      UserId = locked.CurrentLeaderUserId,
+      GuestEmail = null,
+      OrderNumber = GenerateOrderNumber(now),
+
+      CheckoutHoldId = null,
+
+      SourceType = "AUCTION",
+      AuctionId = locked.Id,
+      PaymentDueAt = now.Add(DefaultAuctionPaymentWindow),
+
+      Status = "AWAITING_PAYMENT",
+      PaidAt = null,
+
+      SubtotalCents = total,
+      DiscountTotalCents = 0,
+      TotalCents = total,
+      CurrencyCode = "USD",
+
+      CreatedAt = now,
+      UpdatedAt = now,
+      Lines = new List<OrderLine>()
+    };
+
+    order.Lines.Add(new OrderLine
+    {
+      Id = Guid.NewGuid(),
+      OrderId = orderId,
+      OfferId = null,
+      ListingId = locked.ListingId,
+
+      UnitPriceCents = total,
+      UnitDiscountCents = 0,
+      UnitFinalPriceCents = total,
+      Quantity = 1,
+      LineSubtotalCents = total,
+      LineDiscountCents = 0,
+      LineTotalCents = total,
+
+      CreatedAt = now,
+      UpdatedAt = now
+    });
+
+    _db.Orders.Add(order);
+  }
+
+  private static string GenerateOrderNumber(DateTimeOffset now)
+  {
+    var date = now.ToString("yyyyMMdd");
+    var suffix = Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
+    return $"MK-{date}-{suffix}";
   }
 }

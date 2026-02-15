@@ -47,6 +47,15 @@ public sealed class OrderSnapshotService
     {
       Id = orderId,
       UserId = userId,
+      GuestEmail = null,
+
+      OrderNumber = GenerateOrderNumber(now),
+      CheckoutHoldId = null,
+
+      SourceType = "STORE",
+      AuctionId = null,
+      PaymentDueAt = null,
+
       CurrencyCode = "USD",
       Status = "DRAFT",
       CreatedAt = createdAt,
@@ -136,9 +145,51 @@ public sealed class OrderSnapshotService
     if (order is null) return null;
 
     return new OrderDto(
+  order.Id,
+  order.UserId,
+  order.OrderNumber,
+  order.SourceType,
+  order.AuctionId,
+  order.PaymentDueAt,
+  order.SubtotalCents,
+  order.DiscountTotalCents,
+  order.TotalCents,
+  order.CurrencyCode,
+  order.Status,
+  order.Lines
+    .OrderBy(l => l.CreatedAt)
+    .Select(l => new OrderLineDto(
+      l.Id,
+      l.OfferId,
+      l.ListingId,
+      l.UnitPriceCents,
+      l.UnitDiscountCents,
+      l.UnitFinalPriceCents,
+      l.Quantity,
+      l.LineSubtotalCents,
+      l.LineDiscountCents,
+      l.LineTotalCents
+    ))
+    .ToList()
+);
+  }
+
+  public async Task<List<OrderDto>> ListForUserAsync(Guid userId, CancellationToken ct)
+  {
+    var orders = await _db.Orders
+      .AsNoTracking()
+      .Include(o => o.Lines)
+      .Where(o => o.UserId == userId)
+      .OrderByDescending(o => o.CreatedAt)
+      .ToListAsync(ct);
+
+    return orders.Select(order => new OrderDto(
       order.Id,
       order.UserId,
       order.OrderNumber,
+      order.SourceType,
+      order.AuctionId,
+      order.PaymentDueAt,
       order.SubtotalCents,
       order.DiscountTotalCents,
       order.TotalCents,
@@ -159,6 +210,14 @@ public sealed class OrderSnapshotService
           l.LineTotalCents
         ))
         .ToList()
-    );
+    )).ToList();
   }
+
+  private static string GenerateOrderNumber(DateTimeOffset now)
+  {
+    var date = now.ToString("yyyyMMdd");
+    var suffix = Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
+    return $"MK-{date}-{suffix}";
+  }
+
 }

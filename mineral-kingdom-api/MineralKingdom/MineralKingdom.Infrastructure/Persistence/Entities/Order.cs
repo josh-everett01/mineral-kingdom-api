@@ -14,8 +14,19 @@ public sealed class Order
   // Idempotency: one paid order per hold
   public Guid? CheckoutHoldId { get; set; }
 
+  // ===== S5-4: Auction order metadata =====
+  // STORE (default) or AUCTION
+  public string SourceType { get; set; } = "STORE";
+
+  // When SourceType=AUCTION, this links the order to a closed auction
+  public Guid? AuctionId { get; set; }
+
+  // For AUCTION orders (and future), indicates payment deadline
+  public DateTimeOffset? PaymentDueAt { get; set; }
+  // =======================================
+
   // Payment-confirmed snapshot
-  public string Status { get; set; } = "DRAFT"; // DRAFT or PAID
+  public string Status { get; set; } = "DRAFT"; // DRAFT, AWAITING_PAYMENT, PAID
   public DateTimeOffset? PaidAt { get; set; }
   public int SubtotalCents { get; set; }
   public int DiscountTotalCents { get; set; }

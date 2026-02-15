@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using MineralKingdom.Contracts.Auth;
 using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
@@ -138,30 +139,33 @@ public sealed class OrderService
     if (order is null) return null;
 
     return new OrderDto(
-      order.Id,
-      order.UserId,
-      order.OrderNumber,
-      order.SubtotalCents,
-      order.DiscountTotalCents,
-      order.TotalCents,
-      order.CurrencyCode,
-      order.Status,
-      order.Lines
-        .OrderBy(l => l.CreatedAt)
-        .Select(l => new OrderLineDto(
-          l.Id,
-          l.OfferId,
-          l.ListingId,
-          l.UnitPriceCents,
-          l.UnitDiscountCents,
-          l.UnitFinalPriceCents,
-          l.Quantity,
-          l.LineSubtotalCents,
-          l.LineDiscountCents,
-          l.LineTotalCents
-        ))
-        .ToList()
-    );
+  order.Id,
+  order.UserId,
+  order.OrderNumber,
+  order.SourceType,
+  order.AuctionId,
+  order.PaymentDueAt,
+  order.SubtotalCents,
+  order.DiscountTotalCents,
+  order.TotalCents,
+  order.CurrencyCode,
+  order.Status,
+  order.Lines
+    .OrderBy(l => l.CreatedAt)
+    .Select(l => new OrderLineDto(
+      l.Id,
+      l.OfferId,
+      l.ListingId,
+      l.UnitPriceCents,
+      l.UnitDiscountCents,
+      l.UnitFinalPriceCents,
+      l.Quantity,
+      l.LineSubtotalCents,
+      l.LineDiscountCents,
+      l.LineTotalCents
+    ))
+    .ToList()
+);
   }
 
   private static string GenerateOrderNumber(DateTimeOffset now)
@@ -170,4 +174,72 @@ public sealed class OrderService
     var suffix = Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
     return $"MK-{date}-{suffix}";
   }
+
+  public async Task<(bool Ok, string? Error)> AdminExtendAuctionPaymentDueAsync(
+  Guid orderId,
+  DateTimeOffset newDueAt,
+  Guid actorUserId,
+  DateTimeOffset now,
+  string? ipAddress,
+  string? userAgent,
+  CancellationToken ct)
+  {
+    var order = await _db.Orders.SingleOrDefaultAsync(o => o.Id == orderId, ct);
+    if (order is null) return (false, "ORDER_NOT_FOUND");
+
+    if (!string.Equals(order.SourceType, "AUCTION", StringComparison.OrdinalIgnoreCase))
+      return (false, "NOT_AUCTION_ORDER");
+
+    if (!string.Equals(order.Status, "AWAITING_PAYMENT", StringComparison.OrdinalIgnoreCase))
+      return (false, "ORDER_NOT_AWAITING_PAYMENT");
+
+    if (order.PaymentDueAt is null) return (false, "PAYMENT_DUE_MISSING");
+
+    // Defensive request validation (since DateTimeOffset can't be null)
+    if (newDueAt == default) return (false, "PAYMENT_DUE_REQUIRED");
+
+    // Must be in the future (prevents setting into the past)
+    if (newDueAt <= now) return (false, "PAYMENT_DUE_MUST_BE_IN_FUTURE");
+
+    var oldDue = order.PaymentDueAt.Value;
+
+    // Must be an extension (or allow same value as idempotent)
+    if (newDueAt < oldDue) return (false, "PAYMENT_DUE_CANNOT_DECREASE");
+
+    // No-op idempotency
+    if (newDueAt == oldDue) return (true, null);
+
+    // Optional guardrail: cap final due date (not required by story, but safe)
+    var maxDue = now.AddDays(30);
+    if (newDueAt > maxDue) return (false, "PAYMENT_DUE_TOO_FAR_IN_FUTURE");
+
+    order.PaymentDueAt = newDueAt;
+    order.UpdatedAt = now;
+
+    _db.AdminAuditLogs.Add(new AdminAuditLog
+    {
+      Id = Guid.NewGuid(),
+
+      ActorUserId = actorUserId,
+      ActorRole = UserRoles.Owner,
+
+      ActionType = "ORDER_PAYMENT_DUE_EXTENDED",
+
+      EntityType = "ORDER",
+      EntityId = order.Id,
+
+      BeforeJson = $"{{\"paymentDueAt\":\"{oldDue:O}\"}}",
+      AfterJson = $"{{\"paymentDueAt\":\"{newDueAt:O}\"}}",
+
+      IpAddress = ipAddress,
+      UserAgent = userAgent,
+
+      CreatedAt = now
+    });
+
+    await _db.SaveChangesAsync(ct);
+    return (true, null);
+  }
+
+
 }

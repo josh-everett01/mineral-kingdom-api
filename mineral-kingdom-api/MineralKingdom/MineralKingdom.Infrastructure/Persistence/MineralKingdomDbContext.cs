@@ -442,6 +442,17 @@ public class MineralKingdomDbContext : DbContext
 
             b.HasIndex(x => x.UserId).HasDatabaseName("IX_orders_UserId");
             b.HasIndex(x => x.GuestEmail).HasDatabaseName("IX_orders_GuestEmail");
+
+            // S5-4 additions
+            b.Property(x => x.SourceType).IsRequired().HasMaxLength(20).HasDefaultValue("STORE");
+            b.Property(x => x.AuctionId);
+            b.Property(x => x.PaymentDueAt);
+
+            b.HasIndex(x => x.AuctionId)
+              .IsUnique()
+              .HasFilter("\"AuctionId\" IS NOT NULL")
+              .HasDatabaseName("UX_orders_AuctionId");
+
         });
 
         modelBuilder.Entity<OrderLine>(b =>

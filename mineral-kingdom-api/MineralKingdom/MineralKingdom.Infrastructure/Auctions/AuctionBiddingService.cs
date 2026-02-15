@@ -11,6 +11,7 @@ public sealed class AuctionBiddingService
   private readonly MineralKingdomDbContext _db;
 
   public AuctionBiddingService(MineralKingdomDbContext db) => _db = db;
+
   private static readonly TimeSpan ClosingWindowDuration = TimeSpan.FromMinutes(10);
 
   public sealed record BidResult(
@@ -18,6 +19,7 @@ public sealed class AuctionBiddingService
     string? Error,
     int? CurrentPriceCents,
     Guid? LeaderUserId,
+    bool HasReserve,
     bool? ReserveMet
   );
 
@@ -49,7 +51,7 @@ public sealed class AuctionBiddingService
     if (auction is null)
     {
       await tx.RollbackAsync(ct);
-      return new BidResult(false, "AUCTION_NOT_FOUND", null, null, null);
+      return new BidResult(false, "AUCTION_NOT_FOUND", null, null, false, null);
     }
 
     var (okClose, errClose) = await EnsureClosingIfPastScheduledCloseAsync(auction, now, ct);
@@ -61,12 +63,10 @@ public sealed class AuctionBiddingService
         Error: errClose ?? "FAILED_TO_ENTER_CLOSING",
         CurrentPriceCents: null,
         LeaderUserId: null,
+        HasReserve: false,
         ReserveMet: null
       );
     }
-
-
-
 
     // Validate status
     if (auction.Status != AuctionStatuses.Live && auction.Status != AuctionStatuses.Closing)
@@ -83,7 +83,6 @@ public sealed class AuctionBiddingService
       await tx.RollbackAsync(ct);
       return await RejectAsyncLocked(auction, userId, maxBidCents, now, "AUCTION_CLOSING_WINDOW_EXPIRED", ct);
     }
-
 
     // Delayed registration: must be LIVE and at least 3h before scheduled close
     if (mode == "DELAYED")
@@ -120,7 +119,8 @@ public sealed class AuctionBiddingService
       await _db.SaveChangesAsync(ct);
       await tx.CommitAsync(ct);
 
-      return new BidResult(true, null, auction.CurrentPriceCents, auction.CurrentLeaderUserId, auction.ReserveMet);
+      var (hasReserve, reserveMet) = GetReservePublic(auction);
+      return new BidResult(true, null, auction.CurrentPriceCents, auction.CurrentLeaderUserId, hasReserve, reserveMet);
     }
 
     // If no leader yet, the first bid just needs to meet starting price.
@@ -182,7 +182,8 @@ public sealed class AuctionBiddingService
     await _db.SaveChangesAsync(ct);
     await tx.CommitAsync(ct);
 
-    return new BidResult(true, null, auction.CurrentPriceCents, auction.CurrentLeaderUserId, auction.ReserveMet);
+    var (finalHasReserve, finalReserveMet) = GetReservePublic(auction);
+    return new BidResult(true, null, auction.CurrentPriceCents, auction.CurrentLeaderUserId, finalHasReserve, finalReserveMet);
   }
 
   /// <summary>
@@ -190,12 +191,13 @@ public sealed class AuctionBiddingService
   /// Applies eligible delayed bids in ReceivedAt order, converting them into active max bids.
   /// </summary>
   public async Task<(bool Ok, string? Error)> InjectDelayedBidsAtClosingStartAsync(
-  Guid auctionId,
-  DateTimeOffset now,
-  CancellationToken ct)
+    Guid auctionId,
+    DateTimeOffset now,
+    CancellationToken ct)
   {
     if (_db.Database.CurrentTransaction is null)
       return (false, "MISSING_TRANSACTION");
+
     // IMPORTANT: caller should already hold a transaction + auction row lock.
     var auction = await _db.Auctions.SingleOrDefaultAsync(a => a.Id == auctionId, ct);
     if (auction is null) return (false, "AUCTION_NOT_FOUND");
@@ -236,9 +238,17 @@ public sealed class AuctionBiddingService
     return (true, null);
   }
 
-  private async Task UpsertMaxBidAsync(Guid auctionId, Guid userId, int maxBidCents, string bidType, DateTimeOffset now, CancellationToken ct)
+  private async Task UpsertMaxBidAsync(
+    Guid auctionId,
+    Guid userId,
+    int maxBidCents,
+    string bidType,
+    DateTimeOffset now,
+    CancellationToken ct)
   {
-    var existing = await _db.AuctionMaxBids.SingleOrDefaultAsync(x => x.AuctionId == auctionId && x.UserId == userId, ct);
+    var existing = await _db.AuctionMaxBids.SingleOrDefaultAsync(
+      x => x.AuctionId == auctionId && x.UserId == userId, ct);
+
     if (existing is null)
     {
       _db.AuctionMaxBids.Add(new AuctionMaxBid
@@ -256,7 +266,6 @@ public sealed class AuctionBiddingService
     if (maxBidCents > existing.MaxBidCents)
       existing.MaxBidCents = maxBidCents;
 
-    // If user chooses delayed, allow switching only if it's still delayed-eligible.
     // For simplicity in S5-2: last mode wins (but we do not change ReceivedAt).
     existing.BidType = bidType;
   }
@@ -322,8 +331,13 @@ public sealed class AuctionBiddingService
     auction.UpdatedAt = now;
   }
 
-
-  private async Task<BidResult> RejectAsync(Guid auctionId, Guid userId, int maxBidCents, DateTimeOffset now, string error, CancellationToken ct)
+  private async Task<BidResult> RejectAsync(
+    Guid auctionId,
+    Guid userId,
+    int maxBidCents,
+    DateTimeOffset now,
+    string error,
+    CancellationToken ct)
   {
     // best-effort log without requiring auction lock
     _db.AuctionBidEvents.Add(new AuctionBidEvent
@@ -339,10 +353,16 @@ public sealed class AuctionBiddingService
 
     try { await _db.SaveChangesAsync(ct); } catch { /* ignore */ }
 
-    return new BidResult(false, error, null, null, null);
+    return new BidResult(false, error, null, null, false, null);
   }
 
-  private async Task<BidResult> RejectAsyncLocked(Auction auction, Guid userId, int maxBidCents, DateTimeOffset now, string error, CancellationToken ct)
+  private async Task<BidResult> RejectAsyncLocked(
+    Auction auction,
+    Guid userId,
+    int maxBidCents,
+    DateTimeOffset now,
+    string error,
+    CancellationToken ct)
   {
     _db.AuctionBidEvents.Add(new AuctionBidEvent
     {
@@ -358,20 +378,21 @@ public sealed class AuctionBiddingService
     });
 
     await _db.SaveChangesAsync(ct);
-    return new BidResult(false, error, auction.CurrentPriceCents, auction.CurrentLeaderUserId, auction.ReserveMet);
+
+    var (hasReserve, reserveMet) = GetReservePublic(auction);
+    return new BidResult(false, error, auction.CurrentPriceCents, auction.CurrentLeaderUserId, hasReserve, reserveMet);
   }
 
   private async Task<(bool Ok, string? Error)> EnsureClosingIfPastScheduledCloseAsync(
-  Auction auction,
-  DateTimeOffset now,
-  CancellationToken ct)
+    Auction auction,
+    DateTimeOffset now,
+    CancellationToken ct)
   {
     if (!string.Equals(auction.Status, AuctionStatuses.Live, StringComparison.OrdinalIgnoreCase))
       return (true, null);
 
     // Defensive: LIVE should not carry a closing window
-    if (string.Equals(auction.Status, AuctionStatuses.Live, StringComparison.OrdinalIgnoreCase) &&
-        auction.ClosingWindowEnd is not null)
+    if (auction.ClosingWindowEnd is not null)
     {
       auction.ClosingWindowEnd = null;
       auction.UpdatedAt = now;
@@ -407,5 +428,12 @@ public sealed class AuctionBiddingService
     if (!ok) return (false, err);
 
     return (true, null);
+  }
+
+  private static (bool HasReserve, bool? ReserveMet) GetReservePublic(Auction auction)
+  {
+    var hasReserve = auction.ReservePriceCents is not null;
+    var reserveMet = hasReserve ? auction.ReserveMet : (bool?)null;
+    return (hasReserve, reserveMet);
   }
 }

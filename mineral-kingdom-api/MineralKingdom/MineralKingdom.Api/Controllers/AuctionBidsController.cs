@@ -16,10 +16,12 @@ public sealed class AuctionBidsController : ControllerBase
   public sealed record PlaceBidRequest(int MaxBidCents, string Mode);
 
   public sealed record PlaceBidResponse(
-    int CurrentPriceCents,
-    Guid? LeaderUserId,
-    bool ReserveMet
-  );
+  int CurrentPriceCents,
+  Guid? LeaderUserId,
+  bool HasReserve,
+  bool? ReserveMet
+);
+
 
   [HttpPost]
   [Authorize(Policy = AuthorizationPolicies.EmailVerified)]
@@ -37,9 +39,11 @@ public sealed class AuctionBidsController : ControllerBase
       return BadRequest(new { error = result.Error });
 
     return Ok(new PlaceBidResponse(
-      CurrentPriceCents: result.CurrentPriceCents!.Value,
-      LeaderUserId: result.LeaderUserId,
-      ReserveMet: result.ReserveMet!.Value
-    ));
+  CurrentPriceCents: result.CurrentPriceCents!.Value,
+  LeaderUserId: result.LeaderUserId,
+  HasReserve: result.HasReserve,
+  ReserveMet: result.ReserveMet
+));
+
   }
 }

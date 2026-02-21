@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using MineralKingdom.Contracts.Auctions;
 using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
@@ -18,6 +19,9 @@ public sealed class PaymentWebhookService
     _checkout = checkout;
   }
 
+  // ----------------------------
+  // STRIPE
+  // ----------------------------
   public async Task ProcessStripeAsync(string eventId, string payloadJson, DateTimeOffset now, CancellationToken ct)
   {
     var (isNew, evt) = await TryRecordEventAsync(PaymentProviders.Stripe, eventId, payloadJson, now, ct);
@@ -39,62 +43,108 @@ public sealed class PaymentWebhookService
     var sessionId = obj.TryGetProperty("id", out var sid) ? sid.GetString() : null;
     var paymentIntent = obj.TryGetProperty("payment_intent", out var pi) ? pi.GetString() : null;
 
+    // Stripe session metadata can be either:
+    // - checkout holds: hold_id + payment_id
+    // - order payments: order_id + order_payment_id
     Guid? holdId = null;
-    Guid? paymentId = null;
+    Guid? checkoutPaymentId = null;
+
+    Guid? orderId = null;
+    Guid? orderPaymentId = null;
 
     if (obj.TryGetProperty("metadata", out var md) && md.ValueKind == JsonValueKind.Object)
     {
       if (md.TryGetProperty("hold_id", out var h) && Guid.TryParse(h.GetString(), out var hid))
         holdId = hid;
 
-      if (md.TryGetProperty("payment_id", out var p) && Guid.TryParse(p.GetString(), out var pid))
-        paymentId = pid;
+      if (md.TryGetProperty("payment_id", out var p) && Guid.TryParse(p.GetString(), out var cpid))
+        checkoutPaymentId = cpid;
+
+      if (md.TryGetProperty("order_id", out var o) && Guid.TryParse(o.GetString(), out var oid))
+        orderId = oid;
+
+      if (md.TryGetProperty("order_payment_id", out var op) && Guid.TryParse(op.GetString(), out var opid))
+        orderPaymentId = opid;
     }
 
-    if (holdId is null)
+    // 1) STORE checkout hold flow (existing)
+    if (holdId is not null)
     {
+      if (checkoutPaymentId.HasValue)
+      {
+        var pay = await _db.CheckoutPayments.SingleOrDefaultAsync(x => x.Id == checkoutPaymentId.Value, ct);
+        if (pay is not null)
+        {
+          pay.ProviderCheckoutId ??= sessionId;
+          pay.ProviderPaymentId = paymentIntent;
+          pay.Status = CheckoutPaymentStatuses.Succeeded;
+          pay.UpdatedAt = now;
+          evt.CheckoutPaymentId = pay.Id;
+        }
+      }
+      else if (!string.IsNullOrWhiteSpace(sessionId))
+      {
+        var pay = await _db.CheckoutPayments
+          .SingleOrDefaultAsync(x => x.Provider == PaymentProviders.Stripe && x.ProviderCheckoutId == sessionId, ct);
+        if (pay is not null)
+        {
+          pay.ProviderPaymentId = paymentIntent;
+          pay.Status = CheckoutPaymentStatuses.Succeeded;
+          pay.UpdatedAt = now;
+          evt.CheckoutPaymentId = pay.Id;
+        }
+      }
+
+      _ = await _checkout.ConfirmPaidFromWebhookAsync(
+        holdId.Value,
+        paymentIntent ?? sessionId ?? eventId,
+        now,
+        ct);
+
       evt.ProcessedAt = now;
       await _db.SaveChangesAsync(ct);
       return;
     }
 
-    // Update payment row if we can
-    if (paymentId.HasValue)
+    // 2) ORDER payment flow (AUCTION)
+    if (orderPaymentId is not null || !string.IsNullOrWhiteSpace(sessionId))
     {
-      var pay = await _db.CheckoutPayments.SingleOrDefaultAsync(x => x.Id == paymentId.Value, ct);
-      if (pay is not null)
+      OrderPayment? op = null;
+
+      if (orderPaymentId.HasValue)
+        op = await _db.OrderPayments.SingleOrDefaultAsync(x => x.Id == orderPaymentId.Value, ct);
+
+      if (op is null && !string.IsNullOrWhiteSpace(sessionId))
+        op = await _db.OrderPayments.SingleOrDefaultAsync(x => x.Provider == PaymentProviders.Stripe && x.ProviderCheckoutId == sessionId, ct);
+
+      if (op is null)
       {
-        pay.ProviderCheckoutId ??= sessionId;
-        pay.ProviderPaymentId = paymentIntent;
-        pay.Status = CheckoutPaymentStatuses.Succeeded;
-        pay.UpdatedAt = now;
-        evt.CheckoutPaymentId = pay.Id;
+        evt.ProcessedAt = now;
+        await _db.SaveChangesAsync(ct);
+        return;
       }
-    }
-    else if (!string.IsNullOrWhiteSpace(sessionId))
-    {
-      var pay = await _db.CheckoutPayments
-        .SingleOrDefaultAsync(x => x.Provider == PaymentProviders.Stripe && x.ProviderCheckoutId == sessionId, ct);
-      if (pay is not null)
-      {
-        pay.ProviderPaymentId = paymentIntent;
-        pay.Status = CheckoutPaymentStatuses.Succeeded;
-        pay.UpdatedAt = now;
-        evt.CheckoutPaymentId = pay.Id;
-      }
+
+      op.ProviderCheckoutId ??= sessionId;
+      op.ProviderPaymentId = paymentIntent ?? op.ProviderPaymentId;
+      op.Status = CheckoutPaymentStatuses.Succeeded; // same status strings
+      op.UpdatedAt = now;
+      evt.OrderPaymentId = op.Id;
+
+      await ConfirmAuctionOrderPaidAsync(op.OrderId, paymentIntent ?? sessionId ?? eventId, now, ct);
+
+      evt.ProcessedAt = now;
+      await _db.SaveChangesAsync(ct);
+      return;
     }
 
-    // Source of truth: webhook triggers confirm paid
-    _ = await _checkout.ConfirmPaidFromWebhookAsync(
-      holdId.Value,
-      paymentIntent ?? sessionId ?? eventId,
-      now,
-      ct);
-
+    // If neither flow matched, just mark processed.
     evt.ProcessedAt = now;
     await _db.SaveChangesAsync(ct);
   }
 
+  // ----------------------------
+  // PAYPAL
+  // ----------------------------
   public async Task ProcessPayPalAsync(string eventId, string payloadJson, DateTimeOffset now, CancellationToken ct)
   {
     var (isNew, evt) = await TryRecordEventAsync(PaymentProviders.PayPal, eventId, payloadJson, now, ct);
@@ -104,6 +154,8 @@ public sealed class PaymentWebhookService
     var root = doc.RootElement;
 
     var eventType = root.TryGetProperty("event_type", out var et) ? et.GetString() : null;
+
+    // We only treat CAPTURE completed as paid
     if (!string.Equals(eventType, "PAYMENT.CAPTURE.COMPLETED", StringComparison.OrdinalIgnoreCase))
     {
       evt.ProcessedAt = now;
@@ -119,14 +171,54 @@ public sealed class PaymentWebhookService
     }
 
     var captureId = res.TryGetProperty("id", out var cid) ? cid.GetString() : null;
-    var orderId = TryGetPayPalOrderId(res);
 
+    // PayPal order id can appear in supplementary_data.related_ids.order_id
+    var paypalOrderId = TryGetPayPalOrderId(res);
+
+    // For your Orders v2 create request, you set:
+    // - custom_id = OrderPaymentId
+    // - invoice_id = OrderId
+    Guid? orderPaymentId = null;
+    Guid? orderId = null;
+
+    if (res.TryGetProperty("custom_id", out var cust) && Guid.TryParse(cust.GetString(), out var opid))
+      orderPaymentId = opid;
+
+    if (res.TryGetProperty("invoice_id", out var inv) && Guid.TryParse(inv.GetString(), out var oid))
+      orderId = oid;
+
+    // ---- ORDER PAYMENTS (AUCTION) ----
+    OrderPayment? op = null;
+
+    if (orderPaymentId.HasValue)
+      op = await _db.OrderPayments.SingleOrDefaultAsync(x => x.Id == orderPaymentId.Value, ct);
+
+    if (op is null && !string.IsNullOrWhiteSpace(paypalOrderId))
+      op = await _db.OrderPayments.SingleOrDefaultAsync(x => x.Provider == PaymentProviders.PayPal && x.ProviderCheckoutId == paypalOrderId, ct);
+
+    if (op is not null)
+    {
+      op.ProviderCheckoutId ??= paypalOrderId;
+      op.ProviderPaymentId = captureId ?? op.ProviderPaymentId;
+      op.Status = CheckoutPaymentStatuses.Succeeded; // same status strings
+      op.UpdatedAt = now;
+      evt.OrderPaymentId = op.Id;
+
+      await ConfirmAuctionOrderPaidAsync(op.OrderId, captureId ?? paypalOrderId ?? eventId, now, ct);
+
+      evt.ProcessedAt = now;
+      await _db.SaveChangesAsync(ct);
+      return;
+    }
+
+    // ---- CHECKOUT PAYMENTS (STORE HOLDS) ----
+    // (Kept for backwards compatibility if you also use PayPal for checkout holds)
     CheckoutPayment? pay = null;
 
-    if (!string.IsNullOrWhiteSpace(orderId))
+    if (!string.IsNullOrWhiteSpace(paypalOrderId))
     {
       pay = await _db.CheckoutPayments
-        .SingleOrDefaultAsync(p => p.Provider == PaymentProviders.PayPal && p.ProviderCheckoutId == orderId, ct);
+        .SingleOrDefaultAsync(p => p.Provider == PaymentProviders.PayPal && p.ProviderCheckoutId == paypalOrderId, ct);
     }
 
     if (pay is null && !string.IsNullOrWhiteSpace(captureId))
@@ -149,11 +241,66 @@ public sealed class PaymentWebhookService
 
     _ = await _checkout.ConfirmPaidFromWebhookAsync(
       pay.HoldId,
-      captureId ?? orderId ?? eventId,
+      captureId ?? paypalOrderId ?? eventId,
       now,
       ct);
 
     evt.ProcessedAt = now;
+    await _db.SaveChangesAsync(ct);
+  }
+
+  // ----------------------------
+  // Helpers
+  // ----------------------------
+
+  private async Task ConfirmAuctionOrderPaidAsync(Guid orderId, string paymentReference, DateTimeOffset now, CancellationToken ct)
+  {
+    // Idempotent: if already paid, do nothing
+    var order = await _db.Orders.SingleOrDefaultAsync(o => o.Id == orderId, ct);
+    if (order is null) return;
+
+    if (string.Equals(order.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+      return;
+
+    // Mark order paid
+    order.Status = "PAID";
+    order.PaidAt ??= now;
+    order.UpdatedAt = now;
+
+    // Auction linkage: update auction + listing + offers
+    if (string.Equals(order.SourceType, "AUCTION", StringComparison.OrdinalIgnoreCase) && order.AuctionId.HasValue)
+    {
+      var auction = await _db.Auctions.SingleOrDefaultAsync(a => a.Id == order.AuctionId.Value, ct);
+      if (auction is not null)
+      {
+        if (string.Equals(auction.Status, AuctionStatuses.ClosedWaitingOnPayment, StringComparison.OrdinalIgnoreCase))
+        {
+          auction.Status = AuctionStatuses.ClosedPaid;
+          auction.UpdatedAt = now;
+        }
+
+        // Mark listing SOLD + drain inventory
+        var listing = await _db.Listings.SingleOrDefaultAsync(l => l.Id == auction.ListingId, ct);
+        if (listing is not null)
+        {
+          listing.Status = MineralKingdom.Contracts.Listings.ListingStatuses.Sold;
+          listing.QuantityAvailable = 0;
+          listing.UpdatedAt = now;
+        }
+
+        // Disable store offers for that listing (belt-and-suspenders)
+        var offers = await _db.StoreOffers
+          .Where(o => o.ListingId == auction.ListingId && o.IsActive)
+          .ToListAsync(ct);
+
+        foreach (var o in offers)
+        {
+          o.IsActive = false;
+          o.UpdatedAt = now;
+        }
+      }
+    }
+
     await _db.SaveChangesAsync(ct);
   }
 

@@ -26,10 +26,16 @@ public sealed class PaymentWebhookEventConfiguration : IEntityTypeConfiguration<
       .IsUnique();
 
     b.HasIndex(x => x.CheckoutPaymentId);
+    b.HasIndex(x => x.OrderPaymentId);
 
     b.HasOne(x => x.CheckoutPayment)
       .WithMany()
       .HasForeignKey(x => x.CheckoutPaymentId)
+      .OnDelete(DeleteBehavior.SetNull);
+
+    b.HasOne(x => x.OrderPayment)
+      .WithMany()
+      .HasForeignKey(x => x.OrderPaymentId)
       .OnDelete(DeleteBehavior.SetNull);
   }
 }

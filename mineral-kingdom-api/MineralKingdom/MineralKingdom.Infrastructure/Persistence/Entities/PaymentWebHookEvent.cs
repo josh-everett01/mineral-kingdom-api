@@ -13,6 +13,10 @@ public sealed class PaymentWebhookEvent
   public Guid? CheckoutPaymentId { get; set; }
   public CheckoutPayment? CheckoutPayment { get; set; }
 
+  public Guid? OrderPaymentId { get; set; }
+
+  public OrderPayment? OrderPayment { get; set; }
+
   // Store raw payload for traceability/debugging
   public string PayloadJson { get; set; } = "{}";
 

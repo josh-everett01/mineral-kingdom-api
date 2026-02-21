@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using MineralKingdom.Contracts.Auctions;
 using MineralKingdom.Contracts.Auth;
 using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Persistence;
@@ -241,5 +242,55 @@ public sealed class OrderService
     return (true, null);
   }
 
+  public async Task<(bool Ok, string? Error)> ConfirmPaidOrderFromWebhookAsync(
+      Guid orderId,
+      string paymentReference,
+      DateTimeOffset now,
+      CancellationToken ct)
+  {
+    await using var tx = await _db.Database.BeginTransactionAsync(ct);
+
+    // Lock row to ensure consistent idempotency under retries
+    var order = await _db.Orders
+      .FromSqlInterpolated($@"SELECT * FROM orders WHERE ""Id"" = {orderId} FOR UPDATE")
+      .SingleOrDefaultAsync(ct);
+
+    if (order is null) return (false, "ORDER_NOT_FOUND");
+
+    // Idempotency: already paid
+    if (string.Equals(order.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+    {
+      await tx.CommitAsync(ct);
+      return (true, null);
+    }
+
+    // Must be awaiting payment for auction flow (or at least not draft)
+    if (!string.Equals(order.Status, "AWAITING_PAYMENT", StringComparison.OrdinalIgnoreCase))
+      return (false, "ORDER_NOT_AWAITING_PAYMENT");
+
+    // Mark order paid
+    order.Status = "PAID";
+    order.PaidAt = now;
+    order.UpdatedAt = now;
+
+    // If this is an auction order, mark auction CLOSED_PAID as well
+    if (string.Equals(order.SourceType, "AUCTION", StringComparison.OrdinalIgnoreCase) && order.AuctionId.HasValue)
+    {
+      var auction = await _db.Auctions
+        .FromSqlInterpolated($@"SELECT * FROM auctions WHERE ""Id"" = {order.AuctionId.Value} FOR UPDATE")
+        .SingleOrDefaultAsync(ct);
+
+      if (auction is not null &&
+          string.Equals(auction.Status, AuctionStatuses.ClosedWaitingOnPayment, StringComparison.OrdinalIgnoreCase))
+      {
+        auction.Status = AuctionStatuses.ClosedPaid;
+        auction.UpdatedAt = now;
+      }
+    }
+
+    await _db.SaveChangesAsync(ct);
+    await tx.CommitAsync(ct);
+    return (true, null);
+  }
 
 }

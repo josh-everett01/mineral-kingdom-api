@@ -22,6 +22,7 @@ using MineralKingdom.Infrastructure.Media;
 using MineralKingdom.Infrastructure.Store;
 using MineralKingdom.Infrastructure.Payments;
 using DotNetEnv;
+using MineralKingdom.Api.Services;
 
 
 
@@ -88,6 +89,10 @@ public class Program
         builder.Services.AddScoped<CheckoutService>();
         builder.Services.AddScoped<CheckoutPaymentService>();
         builder.Services.AddScoped<PaymentWebhookService>();
+        builder.Services.AddScoped<OrderPaymentService>();
+        builder.Services.AddScoped<IOrderPaymentProvider, StripeOrderPaymentProvider>();
+        builder.Services.AddScoped<IOrderPaymentProvider, PayPalOrderPaymentProvider>();
+
 
         builder.Services.AddScoped<ICheckoutPaymentProvider, FakeCheckoutPaymentProvider>();
         builder.Services.AddScoped<ICheckoutPaymentProvider, StripeCheckoutPaymentProvider>();
@@ -101,6 +106,8 @@ public class Program
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Auctions.AuctionBiddingService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Auctions.AuctionStateMachineService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Auctions.AuctionAdminService>();
+        builder.Services.AddScoped<PayPalWebhookVerifier>();
+
 
 
 

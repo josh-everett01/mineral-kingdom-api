@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Auctions;
+using MineralKingdom.Infrastructure.Auctions.Realtime;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using Npgsql;
@@ -9,8 +10,13 @@ namespace MineralKingdom.Infrastructure.Auctions;
 public sealed class AuctionBiddingService
 {
   private readonly MineralKingdomDbContext _db;
+  private readonly IAuctionRealtimePublisher _realtime;
 
-  public AuctionBiddingService(MineralKingdomDbContext db) => _db = db;
+  public AuctionBiddingService(MineralKingdomDbContext db, IAuctionRealtimePublisher realtime)
+  {
+    _db = db;
+    _realtime = realtime;
+  }
 
   private static readonly TimeSpan ClosingWindowDuration = TimeSpan.FromMinutes(10);
 
@@ -119,6 +125,9 @@ public sealed class AuctionBiddingService
       await _db.SaveChangesAsync(ct);
       await tx.CommitAsync(ct);
 
+      // ✅ Publish AFTER commit
+      try { await _realtime.PublishAuctionAsync(auction.Id, now, ct); } catch { /* best-effort */ }
+
       var (hasReserve, reserveMet) = GetReservePublic(auction);
       return new BidResult(true, null, auction.CurrentPriceCents, auction.CurrentLeaderUserId, hasReserve, reserveMet);
     }
@@ -181,6 +190,9 @@ public sealed class AuctionBiddingService
 
     await _db.SaveChangesAsync(ct);
     await tx.CommitAsync(ct);
+
+    // ✅ Publish AFTER commit
+    try { await _realtime.PublishAuctionAsync(auction.Id, now, ct); } catch { /* best-effort */ }
 
     var (finalHasReserve, finalReserveMet) = GetReservePublic(auction);
     return new BidResult(true, null, auction.CurrentPriceCents, auction.CurrentLeaderUserId, finalHasReserve, finalReserveMet);

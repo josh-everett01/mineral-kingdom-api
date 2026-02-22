@@ -2,6 +2,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using MineralKingdom.Infrastructure.Auctions;
+using MineralKingdom.Infrastructure.Auctions.Realtime;
 using MineralKingdom.Infrastructure.Configuration;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Security.Jobs;
@@ -42,6 +43,7 @@ public class Program
               services.AddScoped<AuctionClosingSweepJob>();
               services.AddScoped<AuctionBiddingService>();
               services.AddScoped<AuctionStateMachineService>();
+              services.AddSingleton<IAuctionRealtimePublisher, NoopAuctionRealtimePublisher>();
 
 
 

@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Auctions;
-using MineralKingdom.Infrastructure.Orders;
+using MineralKingdom.Infrastructure.Auctions.Realtime;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using Npgsql;
@@ -11,8 +11,7 @@ public sealed class AuctionStateMachineService
 {
   private readonly MineralKingdomDbContext _db;
   private readonly AuctionBiddingService _bidding;
-
-
+  private readonly IAuctionRealtimePublisher _realtime;
 
   // Keep these as constants so later stories can configure via options
   private static readonly TimeSpan ClosingWindowDuration = TimeSpan.FromMinutes(10);
@@ -20,12 +19,14 @@ public sealed class AuctionStateMachineService
   private static readonly TimeSpan DefaultAuctionDuration = TimeSpan.FromHours(24);
   private static readonly TimeSpan DefaultAuctionPaymentWindow = TimeSpan.FromHours(48);
 
-
-
-  public AuctionStateMachineService(MineralKingdomDbContext db, AuctionBiddingService bidding)
+  public AuctionStateMachineService(
+    MineralKingdomDbContext db,
+    AuctionBiddingService bidding,
+    IAuctionRealtimePublisher realtime)
   {
     _db = db;
     _bidding = bidding;
+    _realtime = realtime;
   }
 
   /// <summary>
@@ -74,15 +75,15 @@ public sealed class AuctionStateMachineService
     }
 
     var relistDue = await _db.Auctions
-  .AsNoTracking()
-  .Where(a =>
-    a.Status == AuctionStatuses.ClosedNotSold &&
-    a.RelistOfAuctionId == null &&                 // fast-path
-    a.ReservePriceCents != null &&                 // only reserve auctions
-    a.ReserveMet == false &&                       // reserve not met
-    a.UpdatedAt <= now.Subtract(RelistDelay))
-    .Select(a => a.Id)
-    .ToListAsync(ct);
+      .AsNoTracking()
+      .Where(a =>
+        a.Status == AuctionStatuses.ClosedNotSold &&
+        a.RelistOfAuctionId == null &&                 // fast-path
+        a.ReservePriceCents != null &&                 // only reserve auctions
+        a.ReserveMet == false &&                       // reserve not met
+        a.UpdatedAt <= now.Subtract(RelistDelay))
+      .Select(a => a.Id)
+      .ToListAsync(ct);
 
     foreach (var id in relistDue)
     {
@@ -95,6 +96,9 @@ public sealed class AuctionStateMachineService
 
   private async Task<(bool Changed, string? Error)> AdvanceLoadedAuctionAsync(Auction a, DateTimeOffset now, CancellationToken ct)
   {
+    // -----------------------------
+    // LIVE -> CLOSING
+    // -----------------------------
     if (a.Status == AuctionStatuses.Live)
     {
       if (a.CloseTime > now) return (false, null);
@@ -146,7 +150,7 @@ public sealed class AuctionStateMachineService
 
       await _db.SaveChangesAsync(ct);
 
-      // Option A: no transaction inside InjectDelayedBids...
+      // Inject delayed bids at closing start (must be within same tx)
       var (ok, err) = await _bidding.InjectDelayedBidsAtClosingStartAsync(locked.Id, now, ct);
       if (!ok)
       {
@@ -157,9 +161,15 @@ public sealed class AuctionStateMachineService
       await _db.SaveChangesAsync(ct);
       await tx.CommitAsync(ct);
 
+      // ✅ Publish AFTER commit
+      try { await _realtime.PublishAuctionAsync(locked.Id, now, ct); } catch { /* best-effort */ }
+
       return (true, null);
     }
 
+    // -----------------------------
+    // CLOSING -> CLOSED_*
+    // -----------------------------
     if (a.Status == AuctionStatuses.Closing)
     {
       await using var tx = await _db.Database.BeginTransactionAsync(ct);
@@ -228,6 +238,10 @@ public sealed class AuctionStateMachineService
       {
         await _db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
+
+        // ✅ Publish AFTER commit
+        try { await _realtime.PublishAuctionAsync(locked.Id, now, ct); } catch { /* best-effort */ }
+
         return (true, null);
       }
       catch (DbUpdateException ex) when (ex.InnerException is PostgresException pg && pg.SqlState == PostgresErrorCodes.UniqueViolation)
@@ -235,6 +249,10 @@ public sealed class AuctionStateMachineService
         // If the unique violation is from UX_orders_AuctionId due to a race,
         // treat as idempotent success.
         await tx.RollbackAsync(ct);
+
+        // ✅ Best-effort publish a fresh snapshot (another worker likely won the race)
+        try { await _realtime.PublishAuctionAsync(a.Id, now, ct); } catch { /* best-effort */ }
+
         return (true, null);
       }
     }
@@ -353,11 +371,20 @@ public sealed class AuctionStateMachineService
     {
       await _db.SaveChangesAsync(ct);
       await tx.CommitAsync(ct);
+
+      // ✅ Publish AFTER commit: old + new
+      try { await _realtime.PublishAuctionAsync(old.Id, now, ct); } catch { /* best-effort */ }
+      try { await _realtime.PublishAuctionAsync(newAuctionId, now, ct); } catch { /* best-effort */ }
+
       return (true, null);
     }
     catch (DbUpdateException ex) when (ex.InnerException is PostgresException pg && pg.SqlState == PostgresErrorCodes.UniqueViolation)
     {
       await tx.RollbackAsync(ct);
+
+      // Best-effort publish old (another worker likely relisted)
+      try { await _realtime.PublishAuctionAsync(oldAuctionId, now, ct); } catch { /* best-effort */ }
+
       return (false, null);
     }
   }

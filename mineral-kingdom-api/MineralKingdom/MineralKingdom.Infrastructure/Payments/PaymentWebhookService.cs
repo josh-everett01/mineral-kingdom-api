@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Auctions;
 using MineralKingdom.Contracts.Store;
+using MineralKingdom.Infrastructure.Auctions.Realtime;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using MineralKingdom.Infrastructure.Store;
@@ -12,11 +13,13 @@ public sealed class PaymentWebhookService
 {
   private readonly MineralKingdomDbContext _db;
   private readonly CheckoutService _checkout;
+  private readonly IAuctionRealtimePublisher _realtime;
 
-  public PaymentWebhookService(MineralKingdomDbContext db, CheckoutService checkout)
+  public PaymentWebhookService(MineralKingdomDbContext db, CheckoutService checkout, IAuctionRealtimePublisher realtime)
   {
     _db = db;
     _checkout = checkout;
+    _realtime = realtime;
   }
 
   // ----------------------------
@@ -302,6 +305,12 @@ public sealed class PaymentWebhookService
     }
 
     await _db.SaveChangesAsync(ct);
+
+    // ✅ Publish AFTER save (DB authoritative)
+    if (order.AuctionId.HasValue)
+    {
+      try { await _realtime.PublishAuctionAsync(order.AuctionId.Value, now, ct); } catch { /* best-effort */ }
+    }
   }
 
   private async Task<(bool IsNew, PaymentWebhookEvent Event)> TryRecordEventAsync(

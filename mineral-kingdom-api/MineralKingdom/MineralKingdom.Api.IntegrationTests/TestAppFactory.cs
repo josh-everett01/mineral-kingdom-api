@@ -57,6 +57,12 @@ public sealed class TestAppFactory : WebApplicationFactory<MineralKingdom.Api.Pr
         ["MK_MEDIA:BUCKET"] = "mk-test-media",
         ["MK_MEDIA:CDN_BASE_URL"] = "https://cdn.test",
         ["MK_MEDIA:URL_EXPIRATION_SECONDS"] = "900",
+        ["MK_PAYMENTS:Mode"] = "FAKE",
+
+        // Ensure PayPal provider never fails in CI (even though FAKE mode should short-circuit)
+        ["MK_PAYPAL:ClientId"] = "mk-test-paypal-client",
+        ["MK_PAYPAL:Secret"] = "mk-test-paypal-secret",
+        ["MK_PAYPAL:Environment"] = "Sandbox",
 
       };
 

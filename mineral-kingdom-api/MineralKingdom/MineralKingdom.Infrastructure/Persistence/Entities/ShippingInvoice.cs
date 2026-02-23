@@ -19,4 +19,14 @@ public sealed class ShippingInvoice
 
   public DateTimeOffset CreatedAt { get; set; }
   public DateTimeOffset UpdatedAt { get; set; }
+
+  // Payment provider metadata (set when payment is started / confirmed)
+  public string? Provider { get; set; }                 // STRIPE | PAYPAL
+  public string? ProviderCheckoutId { get; set; }        // session/order id
+  public string? ProviderPaymentId { get; set; }         // payment intent/capture id
+  public string? PaymentReference { get; set; }          // optional display/reference
+
+  // Admin override
+  public bool IsOverride { get; set; } = false;
+  public string? OverrideReason { get; set; }
 }

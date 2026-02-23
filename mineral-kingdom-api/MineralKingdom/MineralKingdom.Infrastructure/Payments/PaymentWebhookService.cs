@@ -54,6 +54,7 @@ public sealed class PaymentWebhookService
 
     Guid? orderId = null;
     Guid? orderPaymentId = null;
+    Guid? shippingInvoiceId = null;
 
     if (obj.TryGetProperty("metadata", out var md) && md.ValueKind == JsonValueKind.Object)
     {
@@ -68,6 +69,9 @@ public sealed class PaymentWebhookService
 
       if (md.TryGetProperty("order_payment_id", out var op) && Guid.TryParse(op.GetString(), out var opid))
         orderPaymentId = opid;
+
+      if (md.TryGetProperty("shipping_invoice_id", out var si) && Guid.TryParse(si.GetString(), out var sid2))
+        shippingInvoiceId = sid2;
     }
 
     // 1) STORE checkout hold flow (existing)
@@ -134,6 +138,37 @@ public sealed class PaymentWebhookService
       evt.OrderPaymentId = op.Id;
 
       await ConfirmAuctionOrderPaidAsync(op.OrderId, paymentIntent ?? sessionId ?? eventId, now, ct);
+
+      evt.ProcessedAt = now;
+      await _db.SaveChangesAsync(ct);
+      return;
+    }
+
+    // 3) SHIPPING INVOICE flow
+    if (shippingInvoiceId is not null || !string.IsNullOrWhiteSpace(sessionId))
+    {
+      ShippingInvoice? inv = null;
+
+      if (shippingInvoiceId.HasValue)
+        inv = await _db.ShippingInvoices.SingleOrDefaultAsync(x => x.Id == shippingInvoiceId.Value, ct);
+
+      if (inv is null && !string.IsNullOrWhiteSpace(sessionId))
+        inv = await _db.ShippingInvoices.SingleOrDefaultAsync(x => x.Provider == PaymentProviders.Stripe && x.ProviderCheckoutId == sessionId, ct);
+
+      if (inv is null)
+      {
+        evt.ProcessedAt = now;
+        await _db.SaveChangesAsync(ct);
+        return;
+      }
+
+      inv.ProviderCheckoutId ??= sessionId;
+      inv.ProviderPaymentId = paymentIntent ?? inv.ProviderPaymentId;
+
+      // Treat completion as paid
+      inv.Status = "PAID";
+      inv.PaidAt ??= now;
+      inv.UpdatedAt = now;
 
       evt.ProcessedAt = now;
       await _db.SaveChangesAsync(ct);
@@ -208,6 +243,33 @@ public sealed class PaymentWebhookService
       evt.OrderPaymentId = op.Id;
 
       await ConfirmAuctionOrderPaidAsync(op.OrderId, captureId ?? paypalOrderId ?? eventId, now, ct);
+
+      evt.ProcessedAt = now;
+      await _db.SaveChangesAsync(ct);
+      return;
+    }
+
+    // ---- SHIPPING INVOICES ----
+    Guid? shippingInvoiceId = null;
+
+    if (res.TryGetProperty("custom_id", out var cust2) && Guid.TryParse(cust2.GetString(), out var sid))
+      shippingInvoiceId = sid;
+
+    ShippingInvoice? sinv = null;
+
+    if (shippingInvoiceId.HasValue)
+      sinv = await _db.ShippingInvoices.SingleOrDefaultAsync(x => x.Id == shippingInvoiceId.Value, ct);
+
+    if (sinv is null && !string.IsNullOrWhiteSpace(paypalOrderId))
+      sinv = await _db.ShippingInvoices.SingleOrDefaultAsync(x => x.Provider == PaymentProviders.PayPal && x.ProviderCheckoutId == paypalOrderId, ct);
+
+    if (sinv is not null)
+    {
+      sinv.ProviderCheckoutId ??= paypalOrderId;
+      sinv.ProviderPaymentId = captureId ?? sinv.ProviderPaymentId;
+      sinv.Status = "PAID";
+      sinv.PaidAt ??= now;
+      sinv.UpdatedAt = now;
 
       evt.ProcessedAt = now;
       await _db.SaveChangesAsync(ct);

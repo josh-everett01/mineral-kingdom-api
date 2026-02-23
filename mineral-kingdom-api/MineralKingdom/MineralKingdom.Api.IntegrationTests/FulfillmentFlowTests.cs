@@ -64,6 +64,31 @@ public sealed class FulfillmentFlowTests : IClassFixture<PostgresContainerFixtur
     var packedRes = await client.PostAsync($"/api/admin/orders/{order.Id}/fulfillment/packed", content: null);
     packedRes.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
+    // NEW (S6-3): shipping requires CLOSED box + paid (or satisfied) shipping invoice
+    var reloadedAfterPack = await db.Orders.AsNoTracking().SingleAsync(o => o.Id == order.Id);
+    reloadedAfterPack.FulfillmentGroupId.Should().NotBeNull();
+    var groupId = reloadedAfterPack.FulfillmentGroupId!.Value;
+
+    var groupTracked = await db.FulfillmentGroups.SingleAsync(g => g.Id == groupId);
+    groupTracked.BoxStatus = "CLOSED";
+    groupTracked.ClosedAt = DateTimeOffset.UtcNow;
+    groupTracked.UpdatedAt = DateTimeOffset.UtcNow;
+
+    // Create a "satisfied" shipping invoice (amount 0 => paid) so we can ship in this test
+    db.ShippingInvoices.Add(new ShippingInvoice
+    {
+      Id = Guid.NewGuid(),
+      FulfillmentGroupId = groupId,
+      AmountCents = 0,
+      CurrencyCode = "USD",
+      Status = "PAID",
+      PaidAt = DateTimeOffset.UtcNow,
+      CreatedAt = DateTimeOffset.UtcNow,
+      UpdatedAt = DateTimeOffset.UtcNow
+    });
+
+    await db.SaveChangesAsync();
+
     var shippedReq = new AdminMarkShippedRequest
     {
       ShippingCarrier = "USPS",
@@ -79,9 +104,10 @@ public sealed class FulfillmentFlowTests : IClassFixture<PostgresContainerFixtur
     var reloadedOrder = await db.Orders.AsNoTracking().SingleAsync(o => o.Id == order.Id);
     reloadedOrder.FulfillmentGroupId.Should().NotBeNull();
 
-    var groupId = reloadedOrder.FulfillmentGroupId!.Value;
+    var deliveredGroupId = reloadedOrder.FulfillmentGroupId!.Value;
+    deliveredGroupId.Should().Be(groupId);
 
-    var group = await db.FulfillmentGroups.AsNoTracking().SingleAsync(g => g.Id == groupId);
+    var group = await db.FulfillmentGroups.AsNoTracking().SingleAsync(g => g.Id == deliveredGroupId);
     group.Status.Should().Be("DELIVERED");
     group.PackedAt.Should().NotBeNull();
     group.ShippedAt.Should().NotBeNull();
@@ -90,7 +116,7 @@ public sealed class FulfillmentFlowTests : IClassFixture<PostgresContainerFixtur
     group.TrackingNumber.Should().Be("9400TEST123");
 
     var audits = await db.AdminAuditLogs.AsNoTracking()
-      .Where(a => a.EntityType == "FULFILLMENT_GROUP" && a.EntityId == groupId)
+      .Where(a => a.EntityType == "FULFILLMENT_GROUP" && a.EntityId == deliveredGroupId)
       .OrderBy(a => a.CreatedAt)
       .ToListAsync();
 

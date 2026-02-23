@@ -543,6 +543,17 @@ public class MineralKingdomDbContext : DbContext
             b.Property(x => x.UpdatedAt).IsRequired();
 
             b.HasIndex(x => new { x.FulfillmentGroupId, x.Status });
+
+            b.Property(x => x.Provider).HasMaxLength(20);
+            b.Property(x => x.ProviderCheckoutId).HasMaxLength(200);
+            b.Property(x => x.ProviderPaymentId).HasMaxLength(200);
+            b.Property(x => x.PaymentReference).HasMaxLength(200);
+
+            b.Property(x => x.IsOverride).HasDefaultValue(false);
+            b.Property(x => x.OverrideReason).HasMaxLength(500);
+
+            // Helpful for webhook lookups / idempotency
+            b.HasIndex(x => new { x.Provider, x.ProviderCheckoutId });
         });
     }
 }

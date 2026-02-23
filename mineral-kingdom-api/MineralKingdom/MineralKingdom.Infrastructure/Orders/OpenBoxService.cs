@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using MineralKingdom.Infrastructure.Payments;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 
@@ -8,7 +9,13 @@ public sealed class OpenBoxService
 {
   private readonly MineralKingdomDbContext _db;
 
-  public OpenBoxService(MineralKingdomDbContext db) => _db = db;
+  private readonly ShippingInvoiceService _shipping;
+
+  public OpenBoxService(MineralKingdomDbContext db, ShippingInvoiceService shipping)
+  {
+    _db = db;
+    _shipping = shipping;
+  }
 
   public async Task<(bool Ok, string? Error, FulfillmentGroup? Box)> GetOrCreateOpenBoxAsync(
     Guid userId,
@@ -138,6 +145,11 @@ public sealed class OpenBoxService
     box.UpdatedAt = now;
 
     await _db.SaveChangesAsync(ct);
+
+    // Ensure shipping invoice exists when box is closed (idempotent)
+    var (ok, err, _) = await _shipping.EnsureInvoiceForGroupAsync(box.Id, now, ct);
+    if (!ok) return (false, err);
+
     return (true, null);
   }
 }

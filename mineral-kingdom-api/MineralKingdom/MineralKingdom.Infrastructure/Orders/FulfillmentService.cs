@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Auth;
+using MineralKingdom.Infrastructure.Payments;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 
@@ -10,7 +11,13 @@ public sealed class FulfillmentService
 {
   private readonly MineralKingdomDbContext _db;
 
-  public FulfillmentService(MineralKingdomDbContext db) => _db = db;
+  private readonly ShippingInvoiceService _shipping;
+
+  public FulfillmentService(MineralKingdomDbContext db, ShippingInvoiceService shipping)
+  {
+    _db = db;
+    _shipping = shipping;
+  }
 
   public async Task<(bool Ok, string? Error)> AdminMarkPackedAsync(
     Guid orderId,
@@ -95,6 +102,18 @@ public sealed class FulfillmentService
     // Idempotency
     if (string.Equals(group.Status, "SHIPPED", StringComparison.OrdinalIgnoreCase))
       return (true, null);
+
+    // Box must be closed before shipping (combined shipping semantics)
+    if (!string.Equals(group.BoxStatus, "CLOSED", StringComparison.OrdinalIgnoreCase))
+      return (false, "BOX_NOT_CLOSED");
+
+    // Ensure shipping invoice exists (idempotent)
+    var (invOk, invErr, inv) = await _shipping.EnsureInvoiceForGroupAsync(group.Id, now, ct);
+    if (!invOk || inv is null) return (false, invErr);
+
+    // Gate shipping when required
+    if (inv.AmountCents > 0 && !string.Equals(inv.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+      return (false, "SHIPPING_UNPAID");
 
     if (!string.Equals(group.Status, "PACKED", StringComparison.OrdinalIgnoreCase))
       return (false, "ORDER_NOT_PACKED");

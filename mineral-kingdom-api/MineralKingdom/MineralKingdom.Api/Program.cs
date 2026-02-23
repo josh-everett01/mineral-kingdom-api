@@ -94,6 +94,10 @@ public class Program
         builder.Services.AddScoped<OrderPaymentService>();
         builder.Services.AddScoped<IOrderPaymentProvider, StripeOrderPaymentProvider>();
         builder.Services.AddScoped<IOrderPaymentProvider, PayPalOrderPaymentProvider>();
+        builder.Services.AddScoped<ShippingInvoicePaymentService>();
+
+        builder.Services.AddScoped<IShippingInvoicePaymentProvider, StripeShippingInvoicePaymentProvider>();
+        builder.Services.AddScoped<IShippingInvoicePaymentProvider, PayPalShippingInvoicePaymentProvider>();
 
 
         builder.Services.AddScoped<ICheckoutPaymentProvider, FakeCheckoutPaymentProvider>();
@@ -132,7 +136,8 @@ public class Program
         builder.Services.AddScoped<IAuctionRealtimePublisher, AuctionRealtimePublisher>();
         builder.Services.AddScoped<FulfillmentService>();
         builder.Services.AddScoped<OpenBoxService>();
-
+        builder.Services.Configure<ShippingOptions>(builder.Configuration.GetSection("MK_SHIPPING"));
+        builder.Services.AddScoped<ShippingInvoiceService>();
 
         // -------------------------
         // Authorization policy: unverified users cannot bid

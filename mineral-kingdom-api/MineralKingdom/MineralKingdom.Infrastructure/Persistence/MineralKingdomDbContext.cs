@@ -517,6 +517,13 @@ public class MineralKingdomDbContext : DbContext
       .HasForeignKey(x => x.FulfillmentGroupId)
       .OnDelete(DeleteBehavior.SetNull);
 
+    b.Property(x => x.BoxStatus).HasMaxLength(16).IsRequired().HasDefaultValue("CLOSED");
+    b.Property(x => x.ClosedAt);
+
+    b.HasIndex(x => x.BoxStatus);
+    // optional but useful for admin queues
+    b.HasIndex(x => new { x.BoxStatus, x.UpdatedAt });
+
     // Shipping invoices
     b.HasMany(x => x.ShippingInvoices)
       .WithOne(x => x.FulfillmentGroup)

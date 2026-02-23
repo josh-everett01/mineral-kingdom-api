@@ -131,6 +131,7 @@ public class Program
         builder.Services.AddSingleton<AuctionRealtimeHub>();
         builder.Services.AddScoped<IAuctionRealtimePublisher, AuctionRealtimePublisher>();
         builder.Services.AddScoped<FulfillmentService>();
+        builder.Services.AddScoped<OpenBoxService>();
 
 
         // -------------------------

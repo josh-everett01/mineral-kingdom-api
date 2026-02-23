@@ -19,6 +19,11 @@ public sealed class FulfillmentGroup
   public DateTimeOffset? ShippedAt { get; set; }
   public DateTimeOffset? DeliveredAt { get; set; }
 
+  // Open Box / combined shipping
+  // OPEN | CLOSED
+  public string BoxStatus { get; set; } = "CLOSED";
+  public DateTimeOffset? ClosedAt { get; set; }
+
   public string? ShippingCarrier { get; set; }
   public string? TrackingNumber { get; set; }
 

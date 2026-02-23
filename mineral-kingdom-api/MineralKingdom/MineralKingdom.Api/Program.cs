@@ -24,6 +24,7 @@ using MineralKingdom.Infrastructure.Payments;
 using DotNetEnv;
 using MineralKingdom.Api.Services;
 using MineralKingdom.Infrastructure.Auctions.Realtime;
+using MineralKingdom.Infrastructure.Orders;
 
 
 
@@ -129,6 +130,7 @@ public class Program
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Orders.OrderService>();
         builder.Services.AddSingleton<AuctionRealtimeHub>();
         builder.Services.AddScoped<IAuctionRealtimePublisher, AuctionRealtimePublisher>();
+        builder.Services.AddScoped<FulfillmentService>();
 
 
         // -------------------------

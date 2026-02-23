@@ -115,12 +115,21 @@ public sealed class AuctionSseBroadcastTests : IClassFixture<PostgresContainerFi
     all.Should().Contain("event: snapshot");
     all.Should().Contain("data:");
 
-    var dataLine = all.Split('\n').First(l => l.StartsWith("data: ", StringComparison.OrdinalIgnoreCase));
-    var json = dataLine.Substring("data: ".Length);
+    // IMPORTANT: take the last data line, not the first (first is often initial snapshot w/ bidCount=0)
+    var dataLines = all.Split('\n')
+      .Where(l => l.StartsWith("data: ", StringComparison.OrdinalIgnoreCase))
+      .ToList();
+
+    dataLines.Should().NotBeEmpty();
+
+    var lastDataLine = dataLines.Last();
+    var json = lastDataLine.Substring("data: ".Length);
 
     var snap = System.Text.Json.JsonSerializer.Deserialize<AuctionRealtimeSnapshot>(json);
     snap.Should().NotBeNull();
     snap!.AuctionId.Should().Be(auctionId);
+
+    // This is now stable: we parsed the latest snapshot we received
     snap.BidCount.Should().Be(1);
     snap.CurrentPriceCents.Should().BeGreaterThan(0);
   }

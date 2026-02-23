@@ -169,7 +169,7 @@ public sealed class AuctionOrderInventoryWebhookTests : IClassFixture<PostgresCo
       auction.Status.Should().Be(AuctionStatuses.ClosedPaid);
 
       var order = await db.Orders.SingleAsync(x => x.Id == orderId);
-      order.Status.Should().Be("PAID");
+      order.Status.Should().Be("READY_TO_FULFILL");
       order.PaidAt.Should().NotBeNull();
 
       var op = await db.OrderPayments.SingleAsync(x => x.Id == orderPaymentId);
@@ -326,7 +326,7 @@ public sealed class AuctionOrderInventoryWebhookTests : IClassFixture<PostgresCo
       auction.Status.Should().Be(AuctionStatuses.ClosedPaid);
 
       var order = await db.Orders.SingleAsync(x => x.Id == orderId);
-      order.Status.Should().Be("PAID");
+      order.Status.Should().Be("READY_TO_FULFILL");
       order.PaidAt.Should().NotBeNull();
 
       var op = await db.OrderPayments.SingleAsync(x => x.Id == orderPaymentId);

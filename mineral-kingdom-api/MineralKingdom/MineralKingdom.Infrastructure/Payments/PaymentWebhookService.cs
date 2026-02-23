@@ -262,11 +262,11 @@ public sealed class PaymentWebhookService
     var order = await _db.Orders.SingleOrDefaultAsync(o => o.Id == orderId, ct);
     if (order is null) return;
 
-    if (string.Equals(order.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+    if (string.Equals(order.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase))
       return;
 
     // Mark order paid
-    order.Status = "PAID";
+    order.Status = "READY_TO_FULFILL";
     order.PaidAt ??= now;
     order.UpdatedAt = now;
 

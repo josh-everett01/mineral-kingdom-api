@@ -292,7 +292,7 @@ public sealed class StripeWebhookPaymentsTests : IClassFixture<PostgresContainer
   "data": {
     "object": {
       "object": "checkout.session",
-      "payment_status": "paid",
+      "payment_status": "READY_TO_FULFILL",
       "payment_intent": "{{paymentIntentId}}",
       "metadata": {
         "hold_id": "{{holdId}}",

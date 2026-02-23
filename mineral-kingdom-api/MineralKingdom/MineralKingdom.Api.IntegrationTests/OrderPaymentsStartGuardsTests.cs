@@ -84,7 +84,7 @@ public sealed class OrderPaymentsStartGuardsTests : IClassFixture<PostgresContai
         UserId = user.Id,
         SourceType = "AUCTION",
         AuctionId = auction.Id,
-        Status = "PAID",
+        Status = "READY_TO_FULFILL",
         PaidAt = now.AddMinutes(-1),
         OrderNumber = "MK-TEST-PAID-001",
         CurrencyCode = "USD",

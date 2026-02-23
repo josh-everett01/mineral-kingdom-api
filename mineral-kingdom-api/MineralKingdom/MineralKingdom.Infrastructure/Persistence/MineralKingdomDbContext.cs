@@ -38,6 +38,8 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<Auction> Auctions => Set<Auction>();
     public DbSet<AuctionMaxBid> AuctionMaxBids => Set<AuctionMaxBid>();
     public DbSet<AuctionBidEvent> AuctionBidEvents => Set<AuctionBidEvent>();
+    public DbSet<FulfillmentGroup> FulfillmentGroups => Set<FulfillmentGroup>();
+    public DbSet<ShippingInvoice> ShippingInvoices => Set<ShippingInvoice>();
 
 
 
@@ -490,6 +492,50 @@ public class MineralKingdomDbContext : DbContext
                 .HasForeignKey(x => x.OrderId);
 
             b.HasIndex(x => x.OrderId).HasDatabaseName("IX_order_ledger_entries_OrderId");
+        });
+
+        modelBuilder.Entity<FulfillmentGroup>(b =>
+{
+    b.ToTable("fulfillment_groups");
+    b.HasKey(x => x.Id);
+
+    b.Property(x => x.GuestEmail).HasMaxLength(320);
+    b.Property(x => x.Status).HasMaxLength(32).IsRequired();
+
+    b.Property(x => x.ShippingCarrier).HasMaxLength(64);
+    b.Property(x => x.TrackingNumber).HasMaxLength(128);
+
+    b.Property(x => x.CreatedAt).IsRequired();
+    b.Property(x => x.UpdatedAt).IsRequired();
+
+    b.HasIndex(x => x.Status);
+    b.HasIndex(x => x.UpdatedAt);
+
+    // Orders link (FK lives on Order)
+    b.HasMany(x => x.Orders)
+      .WithOne(x => x.FulfillmentGroup)
+      .HasForeignKey(x => x.FulfillmentGroupId)
+      .OnDelete(DeleteBehavior.SetNull);
+
+    // Shipping invoices
+    b.HasMany(x => x.ShippingInvoices)
+      .WithOne(x => x.FulfillmentGroup)
+      .HasForeignKey(x => x.FulfillmentGroupId)
+      .OnDelete(DeleteBehavior.Cascade);
+});
+
+        modelBuilder.Entity<ShippingInvoice>(b =>
+        {
+            b.ToTable("shipping_invoices");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.CurrencyCode).HasMaxLength(3).IsRequired();
+            b.Property(x => x.Status).HasMaxLength(16).IsRequired();
+
+            b.Property(x => x.CreatedAt).IsRequired();
+            b.Property(x => x.UpdatedAt).IsRequired();
+
+            b.HasIndex(x => new { x.FulfillmentGroupId, x.Status });
         });
     }
 }

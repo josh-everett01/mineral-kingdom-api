@@ -410,7 +410,7 @@ public sealed class CheckoutService
       GuestEmail = hold.GuestEmail,
       OrderNumber = GenerateOrderNumber(now),
       CheckoutHoldId = hold.Id,
-      Status = "PAID",
+      Status = "READY_TO_FULFILL",
       PaidAt = now,
       CurrencyCode = "USD",
       CreatedAt = now,

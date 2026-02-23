@@ -38,4 +38,7 @@ public sealed class Order
   public DateTimeOffset UpdatedAt { get; set; }
 
   public List<OrderLine> Lines { get; set; } = new();
+
+  public Guid? FulfillmentGroupId { get; set; }
+  public FulfillmentGroup? FulfillmentGroup { get; set; }
 }

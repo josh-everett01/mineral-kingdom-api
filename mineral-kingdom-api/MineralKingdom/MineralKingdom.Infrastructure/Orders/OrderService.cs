@@ -258,18 +258,18 @@ public sealed class OrderService
     if (order is null) return (false, "ORDER_NOT_FOUND");
 
     // Idempotency: already paid
-    if (string.Equals(order.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+    if (string.Equals(order.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase))
     {
       await tx.CommitAsync(ct);
       return (true, null);
     }
 
-    // Must be awaiting payment for auction flow (or at least not draft)
+    // Must be awaiting payment
     if (!string.Equals(order.Status, "AWAITING_PAYMENT", StringComparison.OrdinalIgnoreCase))
       return (false, "ORDER_NOT_AWAITING_PAYMENT");
 
-    // Mark order paid
-    order.Status = "PAID";
+    // Mark order paid/ready
+    order.Status = "READY_TO_FULFILL";
     order.PaidAt = now;
     order.UpdatedAt = now;
 

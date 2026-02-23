@@ -44,7 +44,7 @@ public sealed class OrdersLedgerTests : IClassFixture<PostgresContainerFixture>
         .Include(o => o.Lines)
         .SingleAsync(o => o.CheckoutHoldId == hold.HoldId);
 
-      order.Status.Should().Be("PAID");
+      order.Status.Should().Be("READY_TO_FULFILL");
       order.PaidAt.Should().NotBeNull();
       order.OrderNumber.Should().NotBeNullOrWhiteSpace();
       order.GuestEmail.Should().Be("guest@example.com");
@@ -95,7 +95,7 @@ public sealed class OrdersLedgerTests : IClassFixture<PostgresContainerFixture>
 
     var dto = await res.Content.ReadFromJsonAsync<OrderDto>();
     dto.Should().NotBeNull();
-    dto!.Status.Should().Be("PAID");
+    dto!.Status.Should().Be("READY_TO_FULFILL");
     dto.OrderNumber.Should().Be(orderNumber);
   }
 

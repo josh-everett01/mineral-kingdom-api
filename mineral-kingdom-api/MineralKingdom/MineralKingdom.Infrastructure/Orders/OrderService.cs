@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Auctions;
 using MineralKingdom.Contracts.Auth;
 using MineralKingdom.Contracts.Store;
+using MineralKingdom.Infrastructure.Notifications;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using MineralKingdom.Infrastructure.Store;
@@ -12,7 +13,13 @@ public sealed class OrderService
 {
   private readonly MineralKingdomDbContext _db;
 
-  public OrderService(MineralKingdomDbContext db) => _db = db;
+  private readonly EmailOutboxService _emails;
+
+  public OrderService(MineralKingdomDbContext db, EmailOutboxService emails)
+  {
+    _db = db;
+    _emails = emails;
+  }
 
   public sealed record CreateLine(Guid OfferId, int Quantity);
 
@@ -261,6 +268,39 @@ public sealed class OrderService
     if (string.Equals(order.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase))
     {
       await tx.CommitAsync(ct);
+
+      // S6-4: Payment received email (mandatory) - enqueue after commit
+      try
+      {
+        string? toEmail = null;
+
+        if (order.UserId is Guid uid)
+        {
+          toEmail = await _db.Users.AsNoTracking()
+            .Where(u => u.Id == uid)
+            .Select(u => u.Email)
+            .SingleOrDefaultAsync(ct);
+        }
+        else
+        {
+          toEmail = order.GuestEmail;
+        }
+
+        if (!string.IsNullOrWhiteSpace(toEmail))
+        {
+          var payload =
+            $"{{\"orderId\":\"{order.Id}\",\"orderNumber\":\"{order.OrderNumber}\",\"totalCents\":{order.TotalCents},\"currency\":\"{order.CurrencyCode}\"}}";
+
+          await _emails.EnqueueAsync(
+            toEmail: toEmail,
+            templateKey: EmailTemplateKeys.PaymentReceived,
+            payloadJson: payload,
+            dedupeKey: EmailDedupeKeys.PaymentReceived(order.Id, toEmail),
+            now: now,
+            ct: ct);
+        }
+      }
+      catch { /* best-effort */ }
       return (true, null);
     }
 

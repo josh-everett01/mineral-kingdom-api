@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Auctions;
 using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Auctions.Realtime;
+using MineralKingdom.Infrastructure.Notifications;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using MineralKingdom.Infrastructure.Store;
@@ -15,11 +16,14 @@ public sealed class PaymentWebhookService
   private readonly CheckoutService _checkout;
   private readonly IAuctionRealtimePublisher _realtime;
 
-  public PaymentWebhookService(MineralKingdomDbContext db, CheckoutService checkout, IAuctionRealtimePublisher realtime)
+  private readonly EmailOutboxService _emails;
+
+  public PaymentWebhookService(MineralKingdomDbContext db, CheckoutService checkout, IAuctionRealtimePublisher realtime, EmailOutboxService emails)
   {
     _db = db;
     _checkout = checkout;
     _realtime = realtime;
+    _emails = emails;
   }
 
   // ----------------------------
@@ -265,11 +269,42 @@ public sealed class PaymentWebhookService
 
     if (sinv is not null)
     {
+      var wasPaid = string.Equals(sinv.Status, "PAID", StringComparison.OrdinalIgnoreCase);
+
       sinv.ProviderCheckoutId ??= paypalOrderId;
       sinv.ProviderPaymentId = captureId ?? sinv.ProviderPaymentId;
       sinv.Status = "PAID";
       sinv.PaidAt ??= now;
       sinv.UpdatedAt = now;
+
+      // Enqueue SHIPPING_INVOICE_PAID once (dedupe also protects)
+      if (!wasPaid)
+      {
+        try
+        {
+          var group = await _db.FulfillmentGroups.AsNoTracking().SingleOrDefaultAsync(g => g.Id == sinv.FulfillmentGroupId, ct);
+          if (group?.UserId is Guid uid)
+          {
+            var toEmail = await _db.Users.AsNoTracking()
+              .Where(u => u.Id == uid)
+              .Select(u => u.Email)
+              .SingleOrDefaultAsync(ct);
+
+            if (!string.IsNullOrWhiteSpace(toEmail))
+            {
+              var payload = $"{{\"invoiceId\":\"{sinv.Id}\",\"groupId\":\"{sinv.FulfillmentGroupId}\",\"amountCents\":{sinv.AmountCents}}}";
+              await _emails.EnqueueAsync(
+                toEmail: toEmail,
+                templateKey: EmailTemplateKeys.ShippingInvoicePaid,
+                payloadJson: payload,
+                dedupeKey: EmailDedupeKeys.ShippingInvoicePaid(sinv.Id, toEmail),
+                now: now,
+                ct: ct);
+            }
+          }
+        }
+        catch { /* best-effort */ }
+      }
 
       evt.ProcessedAt = now;
       await _db.SaveChangesAsync(ct);

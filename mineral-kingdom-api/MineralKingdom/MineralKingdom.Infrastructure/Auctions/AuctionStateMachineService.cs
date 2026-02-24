@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Auctions;
 using MineralKingdom.Infrastructure.Auctions.Realtime;
+using MineralKingdom.Infrastructure.Notifications;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using Npgsql;
@@ -19,14 +20,18 @@ public sealed class AuctionStateMachineService
   private static readonly TimeSpan DefaultAuctionDuration = TimeSpan.FromHours(24);
   private static readonly TimeSpan DefaultAuctionPaymentWindow = TimeSpan.FromHours(48);
 
+  private readonly EmailOutboxService _emails;
+
   public AuctionStateMachineService(
     MineralKingdomDbContext db,
     AuctionBiddingService bidding,
-    IAuctionRealtimePublisher realtime)
+    IAuctionRealtimePublisher realtime,
+    EmailOutboxService emails)
   {
     _db = db;
     _bidding = bidding;
     _realtime = realtime;
+    _emails = emails;
   }
 
   /// <summary>
@@ -189,6 +194,39 @@ public sealed class AuctionStateMachineService
       if (locked.Status != AuctionStatuses.Closing)
       {
         await tx.CommitAsync(ct);
+
+        // S6-4: Winning bid email (mandatory) - enqueue after commit
+        if (locked.Status == AuctionStatuses.ClosedWaitingOnPayment)
+        {
+          try
+          {
+            var order = await _db.Orders.AsNoTracking()
+              .SingleOrDefaultAsync(o => o.AuctionId == locked.Id, ct);
+
+            if (order?.UserId is Guid winnerUserId)
+            {
+              var toEmail = await _db.Users.AsNoTracking()
+                .Where(u => u.Id == winnerUserId)
+                .Select(u => u.Email)
+                .SingleOrDefaultAsync(ct);
+
+              if (!string.IsNullOrWhiteSpace(toEmail))
+              {
+                var payload =
+                  $"{{\"auctionId\":\"{locked.Id}\",\"orderId\":\"{order.Id}\",\"orderNumber\":\"{order.OrderNumber}\",\"paymentDueAt\":\"{order.PaymentDueAt:O}\"}}";
+
+                await _emails.EnqueueAsync(
+                  toEmail: toEmail,
+                  templateKey: EmailTemplateKeys.WinningBid,
+                  payloadJson: payload,
+                  dedupeKey: EmailDedupeKeys.WinningBid(locked.Id, toEmail),
+                  now: now,
+                  ct: ct);
+              }
+            }
+          }
+          catch { /* best-effort */ }
+        }
         return (false, null);
       }
 

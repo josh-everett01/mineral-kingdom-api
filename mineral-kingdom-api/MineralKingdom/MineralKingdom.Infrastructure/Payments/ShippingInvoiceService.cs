@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using MineralKingdom.Contracts.Auth;
 using MineralKingdom.Infrastructure.Configuration;
+using MineralKingdom.Infrastructure.Notifications;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 
@@ -12,10 +13,13 @@ public sealed class ShippingInvoiceService
   private readonly MineralKingdomDbContext _db;
   private readonly ShippingOptions _opts;
 
-  public ShippingInvoiceService(MineralKingdomDbContext db, IOptions<ShippingOptions> opts)
+  private readonly EmailOutboxService _emails;
+
+  public ShippingInvoiceService(MineralKingdomDbContext db, IOptions<ShippingOptions> opts, EmailOutboxService emails)
   {
     _db = db;
     _opts = opts.Value ?? new ShippingOptions();
+    _emails = emails;
   }
 
   public async Task<(bool Ok, string? Error, ShippingInvoice? Invoice)> EnsureInvoiceForGroupAsync(
@@ -77,6 +81,31 @@ public sealed class ShippingInvoiceService
 
     _db.ShippingInvoices.Add(inv);
     await _db.SaveChangesAsync(ct);
+
+    // Enqueue SHIPPING_INVOICE_CREATED (best-effort; dedupe prevents duplicates)
+    try
+    {
+      if (group.UserId is Guid uid)
+      {
+        var toEmail = await _db.Users.AsNoTracking()
+          .Where(u => u.Id == uid)
+          .Select(u => u.Email)
+          .SingleOrDefaultAsync(ct);
+
+        if (!string.IsNullOrWhiteSpace(toEmail))
+        {
+          var payload = $"{{\"invoiceId\":\"{inv.Id}\",\"groupId\":\"{group.Id}\",\"amountCents\":{inv.AmountCents},\"currency\":\"{inv.CurrencyCode}\"}}";
+          await _emails.EnqueueAsync(
+            toEmail: toEmail,
+            templateKey: EmailTemplateKeys.ShippingInvoiceCreated,
+            payloadJson: payload,
+            dedupeKey: EmailDedupeKeys.ShippingInvoiceCreated(inv.Id, toEmail),
+            now: now,
+            ct: ct);
+        }
+      }
+    }
+    catch { /* best-effort */ }
 
     return (true, null, inv);
   }

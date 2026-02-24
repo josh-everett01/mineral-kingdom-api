@@ -5,6 +5,7 @@ using MineralKingdom.Infrastructure.Auctions;
 using MineralKingdom.Infrastructure.Auctions.Realtime;
 using MineralKingdom.Infrastructure.Configuration;
 using MineralKingdom.Infrastructure.Persistence;
+using MineralKingdom.Infrastructure.Security;
 using MineralKingdom.Infrastructure.Security.Jobs;
 using MineralKingdom.Worker.Cron;
 using MineralKingdom.Worker.Jobs;
@@ -44,7 +45,8 @@ public class Program
               services.AddScoped<AuctionBiddingService>();
               services.AddScoped<AuctionStateMachineService>();
               services.AddSingleton<IAuctionRealtimePublisher, NoopAuctionRealtimePublisher>();
-
+              services.AddScoped<EmailDispatchJobHandler>();
+              services.AddScoped<IMKEmailSender, DevNullEmailSender>();
 
 
               services.AddHostedService<Worker>();

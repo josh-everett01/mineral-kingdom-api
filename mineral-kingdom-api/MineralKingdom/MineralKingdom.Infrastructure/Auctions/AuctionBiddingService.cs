@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Auctions;
 using MineralKingdom.Infrastructure.Auctions.Realtime;
+using MineralKingdom.Infrastructure.Notifications;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using Npgsql;
@@ -11,11 +12,19 @@ public sealed class AuctionBiddingService
 {
   private readonly MineralKingdomDbContext _db;
   private readonly IAuctionRealtimePublisher _realtime;
+  private readonly EmailOutboxService _emails;
+  private readonly UserNotificationPreferencesService _prefs;
 
-  public AuctionBiddingService(MineralKingdomDbContext db, IAuctionRealtimePublisher realtime)
+  public AuctionBiddingService(
+  MineralKingdomDbContext db,
+  IAuctionRealtimePublisher realtime,
+  EmailOutboxService emails,
+  UserNotificationPreferencesService prefs)
   {
     _db = db;
     _realtime = realtime;
+    _emails = emails;
+    _prefs = prefs;
   }
 
   private static readonly TimeSpan ClosingWindowDuration = TimeSpan.FromMinutes(10);
@@ -159,6 +168,8 @@ public sealed class AuctionBiddingService
 
     await _db.SaveChangesAsync(ct); // ensure recompute query can see max bid
 
+    var oldLeaderUserId = auction.CurrentLeaderUserId;
+    var oldCurrentPrice = auction.CurrentPriceCents;
     // Recompute derived fields based on all IMMEDIATE max bids (and any previously injected delayed bids)
     await RecomputeAndApplyAsync(auction, now, ct);
 
@@ -193,7 +204,46 @@ public sealed class AuctionBiddingService
 
     // ✅ Publish AFTER commit
     try { await _realtime.PublishAuctionAsync(auction.Id, now, ct); } catch { /* best-effort */ }
+    // S6-4 Optional email: OUTBID (toggleable by user prefs)
+    // Trigger: leader changes from oldLeaderUserId -> new leader
+    try
+    {
+      var newLeaderUserId = auction.CurrentLeaderUserId;
 
+      if (oldLeaderUserId.HasValue &&
+          newLeaderUserId.HasValue &&
+          oldLeaderUserId.Value != newLeaderUserId.Value)
+      {
+        // Only notify the OUTBID user (old leader), not the new leader
+        var outbidUserId = oldLeaderUserId.Value;
+
+        // Load email for the outbid user
+        var toEmail = await _db.Users.AsNoTracking()
+          .Where(u => u.Id == outbidUserId)
+          .Select(u => u.Email)
+          .SingleOrDefaultAsync(ct);
+
+        if (!string.IsNullOrWhiteSpace(toEmail))
+        {
+          // Respect optional preference toggle
+          var prefs = await _prefs.GetOrCreateAsync(outbidUserId, now, ct);
+          if (UserNotificationPreferencesService.IsEnabled(prefs, OptionalEmailKeys.Outbid))
+          {
+            var payload =
+              $"{{\"auctionId\":\"{auction.Id}\",\"outbidUserId\":\"{outbidUserId}\",\"newLeaderUserId\":\"{newLeaderUserId}\",\"oldPriceCents\":{oldCurrentPrice},\"newPriceCents\":{auction.CurrentPriceCents}}}";
+
+            await _emails.EnqueueAsync(
+              toEmail: toEmail,
+              templateKey: EmailTemplateKeys.Outbid,
+              payloadJson: payload,
+              dedupeKey: EmailDedupeKeys.Outbid(auction.Id, outbidUserId, auction.CurrentPriceCents, toEmail),
+              now: now,
+              ct: ct);
+          }
+        }
+      }
+    }
+    catch { /* best-effort */ }
     var (finalHasReserve, finalReserveMet) = GetReservePublic(auction);
     return new BidResult(true, null, auction.CurrentPriceCents, auction.CurrentLeaderUserId, finalHasReserve, finalReserveMet);
   }

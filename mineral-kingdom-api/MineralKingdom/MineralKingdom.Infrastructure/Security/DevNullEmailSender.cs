@@ -22,4 +22,10 @@ public sealed class DevNullEmailSender : IMKEmailSender
     _logger.LogInformation("Password reset for {Email}: {Link}", email, resetLink);
     return Task.CompletedTask;
   }
+
+  public Task SendGenericTransactionalAsync(string toEmail, string subject, string body, CancellationToken ct)
+  {
+    Console.WriteLine($"[EMAIL] to={toEmail} subject={subject}\n{body}");
+    return Task.CompletedTask;
+  }
 }

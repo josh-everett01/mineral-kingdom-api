@@ -40,6 +40,8 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<AuctionBidEvent> AuctionBidEvents => Set<AuctionBidEvent>();
     public DbSet<FulfillmentGroup> FulfillmentGroups => Set<FulfillmentGroup>();
     public DbSet<ShippingInvoice> ShippingInvoices => Set<ShippingInvoice>();
+    public DbSet<EmailOutbox> EmailOutbox => Set<EmailOutbox>();
+    public DbSet<UserNotificationPreferences> UserNotificationPreferences => Set<UserNotificationPreferences>();
 
 
 
@@ -554,6 +556,52 @@ public class MineralKingdomDbContext : DbContext
 
             // Helpful for webhook lookups / idempotency
             b.HasIndex(x => new { x.Provider, x.ProviderCheckoutId });
+        });
+        modelBuilder.Entity<EmailOutbox>(b =>
+{
+    b.ToTable("email_outbox");
+
+    b.HasKey(x => x.Id);
+
+    b.Property(x => x.ToEmail).HasMaxLength(320).IsRequired();
+    b.Property(x => x.TemplateKey).HasMaxLength(80).IsRequired();
+
+    b.Property(x => x.PayloadJson).HasColumnType("jsonb").IsRequired();
+
+    b.Property(x => x.DedupeKey).HasMaxLength(200).IsRequired();
+    b.HasIndex(x => x.DedupeKey).IsUnique().HasDatabaseName("UX_email_outbox_DedupeKey");
+
+    b.Property(x => x.Status).HasMaxLength(20).IsRequired().HasDefaultValue("PENDING");
+
+    b.Property(x => x.Attempts).HasDefaultValue(0);
+    b.Property(x => x.MaxAttempts).HasDefaultValue(8);
+
+    b.Property(x => x.LastError).HasColumnType("text");
+
+    b.Property(x => x.CreatedAt).IsRequired();
+    b.Property(x => x.UpdatedAt).IsRequired();
+    b.Property(x => x.SentAt);
+
+    b.HasIndex(x => new { x.Status, x.UpdatedAt }).HasDatabaseName("IX_email_outbox_Status_UpdatedAt");
+});
+
+        modelBuilder.Entity<UserNotificationPreferences>(b =>
+        {
+            b.ToTable("user_notification_preferences");
+
+            b.HasKey(x => x.UserId);
+
+            b.Property(x => x.OutbidEmailEnabled).HasDefaultValue(true);
+            b.Property(x => x.AuctionPaymentRemindersEnabled).HasDefaultValue(true);
+            b.Property(x => x.ShippingInvoiceRemindersEnabled).HasDefaultValue(true);
+            b.Property(x => x.BidAcceptedEmailEnabled).HasDefaultValue(false);
+
+            b.Property(x => x.UpdatedAt).IsRequired();
+
+            b.HasOne<User>()
+      .WithOne()
+      .HasForeignKey<UserNotificationPreferences>(x => x.UserId)
+      .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

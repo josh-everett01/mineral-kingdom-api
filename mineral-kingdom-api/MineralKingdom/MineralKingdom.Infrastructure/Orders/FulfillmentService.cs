@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Auth;
+using MineralKingdom.Infrastructure.Notifications;
 using MineralKingdom.Infrastructure.Payments;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
@@ -13,10 +14,13 @@ public sealed class FulfillmentService
 
   private readonly ShippingInvoiceService _shipping;
 
-  public FulfillmentService(MineralKingdomDbContext db, ShippingInvoiceService shipping)
+  private readonly EmailOutboxService _emails;
+
+  public FulfillmentService(MineralKingdomDbContext db, ShippingInvoiceService shipping, EmailOutboxService emails)
   {
     _db = db;
     _shipping = shipping;
+    _emails = emails;
   }
 
   public async Task<(bool Ok, string? Error)> AdminMarkPackedAsync(
@@ -148,6 +152,31 @@ public sealed class FulfillmentService
     });
 
     await _db.SaveChangesAsync(ct);
+
+    // Enqueue SHIPMENT_CONFIRMED (best-effort; dedupe prevents duplicates)
+    try
+    {
+      if (group.UserId is Guid uid)
+      {
+        var toEmail = await _db.Users.AsNoTracking()
+          .Where(u => u.Id == uid)
+          .Select(u => u.Email)
+          .SingleOrDefaultAsync(ct);
+
+        if (!string.IsNullOrWhiteSpace(toEmail))
+        {
+          var payload = $"{{\"groupId\":\"{group.Id}\",\"carrier\":\"{group.ShippingCarrier}\",\"tracking\":\"{group.TrackingNumber}\"}}";
+          await _emails.EnqueueAsync(
+            toEmail: toEmail,
+            templateKey: EmailTemplateKeys.ShipmentConfirmed,
+            payloadJson: payload,
+            dedupeKey: EmailDedupeKeys.ShipmentConfirmed(group.Id, toEmail),
+            now: now,
+            ct: ct);
+        }
+      }
+    }
+    catch { /* best-effort */ }
     return (true, null);
   }
 

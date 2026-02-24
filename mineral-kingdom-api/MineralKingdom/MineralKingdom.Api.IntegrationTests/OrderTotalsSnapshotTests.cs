@@ -200,7 +200,7 @@ public sealed class OrderTotalsSnapshotTests : IClassFixture<PostgresContainerFi
     using var scope = factory.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
 
-    var svc = new OrderService(db);
+    var svc = scope.ServiceProvider.GetRequiredService<MineralKingdom.Infrastructure.Orders.OrderService>();
     return await svc.CreateDraftAsync(userId, lines, CancellationToken.None);
   }
 }

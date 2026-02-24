@@ -142,6 +142,7 @@ public class Program
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Notifications.UserNotificationPreferencesService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Notifications.UserNotificationPreferencesService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Notifications.EmailOutboxService>();
+        builder.Services.AddScoped<MineralKingdom.Infrastructure.Dashboard.DashboardService>();
         // -------------------------
         // Authorization policy: unverified users cannot bid
         builder.Services.AddAuthorization(options =>

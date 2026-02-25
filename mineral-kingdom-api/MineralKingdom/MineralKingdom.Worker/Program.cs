@@ -47,6 +47,11 @@ public class Program
               services.AddSingleton<IAuctionRealtimePublisher, NoopAuctionRealtimePublisher>();
               services.AddScoped<EmailDispatchJobHandler>();
               services.AddScoped<IMKEmailSender, DevNullEmailSender>();
+              services.AddScoped<MineralKingdom.Infrastructure.Notifications.EmailOutboxService>();
+              services.AddScoped<IJobQueue, DbJobQueue>();
+              services.AddScoped<MineralKingdom.Infrastructure.Notifications.UserNotificationPreferencesService>();
+
+
 
 
               services.AddHostedService<Worker>();

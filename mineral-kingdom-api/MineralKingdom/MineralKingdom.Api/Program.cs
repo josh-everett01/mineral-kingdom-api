@@ -110,7 +110,6 @@ public class Program
         builder.Services.Configure<CheckoutOptions>(builder.Configuration.GetSection("MK_CHECKOUT"));
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Auctions.AuctionStateMachineService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Auctions.AuctionBiddingService>();
-        builder.Services.AddScoped<MineralKingdom.Infrastructure.Auctions.AuctionStateMachineService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Auctions.AuctionAdminService>();
         builder.Services.AddScoped<PayPalWebhookVerifier>();
 
@@ -140,8 +139,6 @@ public class Program
         builder.Services.AddScoped<ShippingInvoiceService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Notifications.EmailOutboxService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Notifications.UserNotificationPreferencesService>();
-        builder.Services.AddScoped<MineralKingdom.Infrastructure.Notifications.UserNotificationPreferencesService>();
-        builder.Services.AddScoped<MineralKingdom.Infrastructure.Notifications.EmailOutboxService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Dashboard.DashboardService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Orders.OrderRefundService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Payments.IOrderRefundProvider, MineralKingdom.Infrastructure.Payments.StripeOrderRefundProvider>();

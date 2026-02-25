@@ -62,9 +62,14 @@ public sealed class ShippingInvoiceService
       Id = Guid.NewGuid(),
       FulfillmentGroupId = groupId,
 
+      // Snapshot baseline tier calc
+      CalculatedAmountCents = amount,
+
+      // Final charged amount (may be overridden later)
       AmountCents = amount,
+
       CurrencyCode = currency,
-      Status = amount <= 0 ? "PAID" : "UNPAID",  // amount 0 => treat as satisfied
+      Status = amount <= 0 ? "PAID" : "UNPAID",
       PaidAt = amount <= 0 ? now : null,
 
       Provider = null,
@@ -214,6 +219,61 @@ public sealed class ShippingInvoiceService
     inv.Provider = provider;
     inv.ProviderPaymentId = providerPaymentId;
     inv.UpdatedAt = now;
+
+    await _db.SaveChangesAsync(ct);
+    return (true, null);
+  }
+
+  public async Task<(bool Ok, string? Error)> AdminOverrideInvoiceAsync(
+  Guid invoiceId,
+  long newAmountCents,
+  string reason,
+  Guid actorUserId,
+  DateTimeOffset now,
+  string? ipAddress,
+  string? userAgent,
+  CancellationToken ct)
+  {
+    if (newAmountCents < 0) return (false, "AMOUNT_INVALID");
+    if (string.IsNullOrWhiteSpace(reason)) return (false, "REASON_REQUIRED");
+    if (reason.Length > 500) return (false, "REASON_TOO_LONG");
+
+    var inv = await _db.ShippingInvoices.SingleOrDefaultAsync(x => x.Id == invoiceId, ct);
+    if (inv is null) return (false, "INVOICE_NOT_FOUND");
+
+    // Optional guardrail: disallow overriding after paid (safer ops)
+    if (string.Equals(inv.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+      return (false, "INVOICE_ALREADY_PAID");
+
+    // Idempotent no-op
+    if (inv.AmountCents == newAmountCents &&
+        inv.IsOverride &&
+        string.Equals(inv.OverrideReason, reason, StringComparison.Ordinal))
+      return (true, null);
+
+    var before = $"{{\"amountCents\":{inv.AmountCents},\"calculatedAmountCents\":{inv.CalculatedAmountCents},\"isOverride\":{inv.IsOverride.ToString().ToLowerInvariant()},\"overrideReason\":{System.Text.Json.JsonSerializer.Serialize(inv.OverrideReason)} }}";
+
+    inv.AmountCents = newAmountCents;
+    inv.IsOverride = true;
+    inv.OverrideReason = reason.Trim();
+    inv.UpdatedAt = now;
+
+    var after = $"{{\"amountCents\":{inv.AmountCents},\"calculatedAmountCents\":{inv.CalculatedAmountCents},\"isOverride\":true,\"overrideReason\":{System.Text.Json.JsonSerializer.Serialize(inv.OverrideReason)} }}";
+
+    _db.AdminAuditLogs.Add(new AdminAuditLog
+    {
+      Id = Guid.NewGuid(),
+      ActorUserId = actorUserId,
+      ActorRole = UserRoles.Owner,
+      ActionType = "SHIPPING_INVOICE_OVERRIDE_APPLIED",
+      EntityType = "SHIPPING_INVOICE",
+      EntityId = inv.Id,
+      BeforeJson = before,
+      AfterJson = after,
+      IpAddress = ipAddress,
+      UserAgent = userAgent,
+      CreatedAt = now
+    });
 
     await _db.SaveChangesAsync(ct);
     return (true, null);

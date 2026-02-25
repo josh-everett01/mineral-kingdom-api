@@ -41,4 +41,5 @@ public sealed class Order
 
   public Guid? FulfillmentGroupId { get; set; }
   public FulfillmentGroup? FulfillmentGroup { get; set; }
+  public List<OrderRefund> Refunds { get; set; } = new();
 }

@@ -42,6 +42,7 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<ShippingInvoice> ShippingInvoices => Set<ShippingInvoice>();
     public DbSet<EmailOutbox> EmailOutbox => Set<EmailOutbox>();
     public DbSet<UserNotificationPreferences> UserNotificationPreferences => Set<UserNotificationPreferences>();
+    public DbSet<OrderRefund> OrderRefunds => Set<OrderRefund>();
 
 
 
@@ -497,41 +498,41 @@ public class MineralKingdomDbContext : DbContext
         });
 
         modelBuilder.Entity<FulfillmentGroup>(b =>
-{
-    b.ToTable("fulfillment_groups");
-    b.HasKey(x => x.Id);
+        {
+            b.ToTable("fulfillment_groups");
+            b.HasKey(x => x.Id);
 
-    b.Property(x => x.GuestEmail).HasMaxLength(320);
-    b.Property(x => x.Status).HasMaxLength(32).IsRequired();
+            b.Property(x => x.GuestEmail).HasMaxLength(320);
+            b.Property(x => x.Status).HasMaxLength(32).IsRequired();
 
-    b.Property(x => x.ShippingCarrier).HasMaxLength(64);
-    b.Property(x => x.TrackingNumber).HasMaxLength(128);
+            b.Property(x => x.ShippingCarrier).HasMaxLength(64);
+            b.Property(x => x.TrackingNumber).HasMaxLength(128);
 
-    b.Property(x => x.CreatedAt).IsRequired();
-    b.Property(x => x.UpdatedAt).IsRequired();
+            b.Property(x => x.CreatedAt).IsRequired();
+            b.Property(x => x.UpdatedAt).IsRequired();
 
-    b.HasIndex(x => x.Status);
-    b.HasIndex(x => x.UpdatedAt);
+            b.HasIndex(x => x.Status);
+            b.HasIndex(x => x.UpdatedAt);
 
-    // Orders link (FK lives on Order)
-    b.HasMany(x => x.Orders)
-      .WithOne(x => x.FulfillmentGroup)
-      .HasForeignKey(x => x.FulfillmentGroupId)
-      .OnDelete(DeleteBehavior.SetNull);
+            // Orders link (FK lives on Order)
+            b.HasMany(x => x.Orders)
+            .WithOne(x => x.FulfillmentGroup)
+            .HasForeignKey(x => x.FulfillmentGroupId)
+            .OnDelete(DeleteBehavior.SetNull);
 
-    b.Property(x => x.BoxStatus).HasMaxLength(16).IsRequired().HasDefaultValue("CLOSED");
-    b.Property(x => x.ClosedAt);
+            b.Property(x => x.BoxStatus).HasMaxLength(16).IsRequired().HasDefaultValue("CLOSED");
+            b.Property(x => x.ClosedAt);
 
-    b.HasIndex(x => x.BoxStatus);
-    // optional but useful for admin queues
-    b.HasIndex(x => new { x.BoxStatus, x.UpdatedAt });
+            b.HasIndex(x => x.BoxStatus);
+            // optional but useful for admin queues
+            b.HasIndex(x => new { x.BoxStatus, x.UpdatedAt });
 
-    // Shipping invoices
-    b.HasMany(x => x.ShippingInvoices)
-      .WithOne(x => x.FulfillmentGroup)
-      .HasForeignKey(x => x.FulfillmentGroupId)
-      .OnDelete(DeleteBehavior.Cascade);
-});
+            // Shipping invoices
+            b.HasMany(x => x.ShippingInvoices)
+            .WithOne(x => x.FulfillmentGroup)
+            .HasForeignKey(x => x.FulfillmentGroupId)
+            .OnDelete(DeleteBehavior.Cascade);
+        });
 
         modelBuilder.Entity<ShippingInvoice>(b =>
         {
@@ -556,34 +557,36 @@ public class MineralKingdomDbContext : DbContext
 
             // Helpful for webhook lookups / idempotency
             b.HasIndex(x => new { x.Provider, x.ProviderCheckoutId });
+            b.Property(x => x.CalculatedAmountCents).HasDefaultValue(0L);
         });
+
         modelBuilder.Entity<EmailOutbox>(b =>
-{
-    b.ToTable("email_outbox");
+        {
+            b.ToTable("email_outbox");
 
-    b.HasKey(x => x.Id);
+            b.HasKey(x => x.Id);
 
-    b.Property(x => x.ToEmail).HasMaxLength(320).IsRequired();
-    b.Property(x => x.TemplateKey).HasMaxLength(80).IsRequired();
+            b.Property(x => x.ToEmail).HasMaxLength(320).IsRequired();
+            b.Property(x => x.TemplateKey).HasMaxLength(80).IsRequired();
 
-    b.Property(x => x.PayloadJson).HasColumnType("jsonb").IsRequired();
+            b.Property(x => x.PayloadJson).HasColumnType("jsonb").IsRequired();
 
-    b.Property(x => x.DedupeKey).HasMaxLength(200).IsRequired();
-    b.HasIndex(x => x.DedupeKey).IsUnique().HasDatabaseName("UX_email_outbox_DedupeKey");
+            b.Property(x => x.DedupeKey).HasMaxLength(200).IsRequired();
+            b.HasIndex(x => x.DedupeKey).IsUnique().HasDatabaseName("UX_email_outbox_DedupeKey");
 
-    b.Property(x => x.Status).HasMaxLength(20).IsRequired().HasDefaultValue("PENDING");
+            b.Property(x => x.Status).HasMaxLength(20).IsRequired().HasDefaultValue("PENDING");
 
-    b.Property(x => x.Attempts).HasDefaultValue(0);
-    b.Property(x => x.MaxAttempts).HasDefaultValue(8);
+            b.Property(x => x.Attempts).HasDefaultValue(0);
+            b.Property(x => x.MaxAttempts).HasDefaultValue(8);
 
-    b.Property(x => x.LastError).HasColumnType("text");
+            b.Property(x => x.LastError).HasColumnType("text");
 
-    b.Property(x => x.CreatedAt).IsRequired();
-    b.Property(x => x.UpdatedAt).IsRequired();
-    b.Property(x => x.SentAt);
+            b.Property(x => x.CreatedAt).IsRequired();
+            b.Property(x => x.UpdatedAt).IsRequired();
+            b.Property(x => x.SentAt);
 
-    b.HasIndex(x => new { x.Status, x.UpdatedAt }).HasDatabaseName("IX_email_outbox_Status_UpdatedAt");
-});
+            b.HasIndex(x => new { x.Status, x.UpdatedAt }).HasDatabaseName("IX_email_outbox_Status_UpdatedAt");
+        });
 
         modelBuilder.Entity<UserNotificationPreferences>(b =>
         {
@@ -599,9 +602,33 @@ public class MineralKingdomDbContext : DbContext
             b.Property(x => x.UpdatedAt).IsRequired();
 
             b.HasOne<User>()
-      .WithOne()
-      .HasForeignKey<UserNotificationPreferences>(x => x.UserId)
-      .OnDelete(DeleteBehavior.Cascade);
+            .WithOne()
+            .HasForeignKey<UserNotificationPreferences>(x => x.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<OrderRefund>(b =>
+        {
+            b.ToTable("order_refunds");
+
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.Provider).HasMaxLength(20).IsRequired();
+            b.Property(x => x.ProviderRefundId).HasMaxLength(200);
+
+            b.Property(x => x.AmountCents).IsRequired();
+            b.Property(x => x.CurrencyCode).HasMaxLength(10).IsRequired();
+
+            b.Property(x => x.Reason).HasMaxLength(500);
+
+            b.Property(x => x.CreatedAt).IsRequired();
+
+            b.HasIndex(x => new { x.OrderId, x.CreatedAt }).HasDatabaseName("IX_order_refunds_OrderId_CreatedAt");
+            b.HasIndex(x => new { x.Provider, x.ProviderRefundId }).HasDatabaseName("IX_order_refunds_Provider_ProviderRefundId");
+
+            b.HasOne(x => x.Order)
+            .WithMany(o => o.Refunds)
+            .HasForeignKey(x => x.OrderId)
+            .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

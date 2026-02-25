@@ -29,4 +29,5 @@ public sealed class ShippingInvoice
   // Admin override
   public bool IsOverride { get; set; } = false;
   public string? OverrideReason { get; set; }
+  public long CalculatedAmountCents { get; set; }
 }

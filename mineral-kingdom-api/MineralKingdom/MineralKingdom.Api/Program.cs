@@ -133,6 +133,14 @@ public class Program
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Orders.OrderService>();
         builder.Services.AddSingleton<AuctionRealtimeHub>();
         builder.Services.AddScoped<IAuctionRealtimePublisher, AuctionRealtimePublisher>();
+        builder.Services.AddSingleton<MineralKingdom.Infrastructure.Orders.Realtime.OrderRealtimeHub>();
+        builder.Services.AddScoped<MineralKingdom.Infrastructure.Orders.Realtime.IOrderRealtimePublisher, MineralKingdom.Infrastructure.Orders.Realtime.OrderRealtimePublisher>();
+
+        builder.Services.AddSingleton<MineralKingdom.Infrastructure.Orders.Realtime.FulfillmentRealtimeHub>();
+        builder.Services.AddScoped<MineralKingdom.Infrastructure.Orders.Realtime.IFulfillmentRealtimePublisher, MineralKingdom.Infrastructure.Orders.Realtime.FulfillmentRealtimePublisher>();
+
+        builder.Services.AddSingleton<MineralKingdom.Infrastructure.Payments.Realtime.ShippingInvoiceRealtimeHub>();
+        builder.Services.AddScoped<MineralKingdom.Infrastructure.Payments.Realtime.IShippingInvoiceRealtimePublisher, MineralKingdom.Infrastructure.Payments.Realtime.ShippingInvoiceRealtimePublisher>();
         builder.Services.AddScoped<FulfillmentService>();
         builder.Services.AddScoped<OpenBoxService>();
         builder.Services.Configure<ShippingOptions>(builder.Configuration.GetSection("MK_SHIPPING"));

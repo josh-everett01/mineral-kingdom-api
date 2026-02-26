@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Auth;
 using MineralKingdom.Infrastructure.Notifications;
+using MineralKingdom.Infrastructure.Orders.Realtime;
 using MineralKingdom.Infrastructure.Payments;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
@@ -16,11 +17,14 @@ public sealed class FulfillmentService
 
   private readonly EmailOutboxService _emails;
 
-  public FulfillmentService(MineralKingdomDbContext db, ShippingInvoiceService shipping, EmailOutboxService emails)
+  private readonly IFulfillmentRealtimePublisher _realtime;
+
+  public FulfillmentService(MineralKingdomDbContext db, ShippingInvoiceService shipping, EmailOutboxService emails, IFulfillmentRealtimePublisher realtime)
   {
     _db = db;
     _shipping = shipping;
     _emails = emails;
+    _realtime = realtime;
   }
 
   public async Task<(bool Ok, string? Error)> AdminMarkPackedAsync(
@@ -76,6 +80,7 @@ public sealed class FulfillmentService
     });
 
     await _db.SaveChangesAsync(ct);
+    try { await _realtime.PublishFulfillmentAsync(group.Id, now, ct); } catch { /* best-effort */ }
     return (true, null);
   }
 
@@ -152,6 +157,8 @@ public sealed class FulfillmentService
     });
 
     await _db.SaveChangesAsync(ct);
+
+    try { await _realtime.PublishFulfillmentAsync(group.Id, now, ct); } catch { /* best-effort */ }
 
     // Enqueue SHIPMENT_CONFIRMED (best-effort; dedupe prevents duplicates)
     try
@@ -232,6 +239,7 @@ public sealed class FulfillmentService
     });
 
     await _db.SaveChangesAsync(ct);
+    try { await _realtime.PublishFulfillmentAsync(group.Id, now, ct); } catch { /* best-effort */ }
     return (true, null);
   }
 
@@ -259,6 +267,7 @@ public sealed class FulfillmentService
     order.UpdatedAt = now;
 
     await _db.SaveChangesAsync(ct);
+    try { await _realtime.PublishFulfillmentAsync(group.Id, now, ct); } catch { /* best-effort */ }
     return group;
   }
 

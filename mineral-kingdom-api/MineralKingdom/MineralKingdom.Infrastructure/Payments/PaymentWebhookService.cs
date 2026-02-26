@@ -4,6 +4,8 @@ using MineralKingdom.Contracts.Auctions;
 using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Auctions.Realtime;
 using MineralKingdom.Infrastructure.Notifications;
+using MineralKingdom.Infrastructure.Orders.Realtime;
+using MineralKingdom.Infrastructure.Payments.Realtime;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using MineralKingdom.Infrastructure.Store;
@@ -18,12 +20,17 @@ public sealed class PaymentWebhookService
 
   private readonly EmailOutboxService _emails;
 
-  public PaymentWebhookService(MineralKingdomDbContext db, CheckoutService checkout, IAuctionRealtimePublisher realtime, EmailOutboxService emails)
+  private readonly IOrderRealtimePublisher _ordersRealtime;
+  private readonly IShippingInvoiceRealtimePublisher _shippingInvoicesRealtime;
+
+  public PaymentWebhookService(MineralKingdomDbContext db, CheckoutService checkout, IAuctionRealtimePublisher realtime, EmailOutboxService emails, IOrderRealtimePublisher ordersRealtime, IShippingInvoiceRealtimePublisher shippingInvoicesRealtime)
   {
     _db = db;
     _checkout = checkout;
     _realtime = realtime;
     _emails = emails;
+    _ordersRealtime = ordersRealtime;
+    _shippingInvoicesRealtime = shippingInvoicesRealtime;
   }
 
   // ----------------------------
@@ -176,6 +183,7 @@ public sealed class PaymentWebhookService
 
       evt.ProcessedAt = now;
       await _db.SaveChangesAsync(ct);
+      try { await _shippingInvoicesRealtime.PublishInvoiceAsync(inv.Id, now, ct); } catch { /* best-effort */ }
       return;
     }
 
@@ -308,6 +316,7 @@ public sealed class PaymentWebhookService
 
       evt.ProcessedAt = now;
       await _db.SaveChangesAsync(ct);
+      try { await _shippingInvoicesRealtime.PublishInvoiceAsync(sinv.Id, now, ct); } catch { /* best-effort */ }
       return;
     }
 
@@ -402,6 +411,8 @@ public sealed class PaymentWebhookService
     }
 
     await _db.SaveChangesAsync(ct);
+
+    try { await _ordersRealtime.PublishOrderAsync(order.Id, now, ct); } catch { /* best-effort */ }
 
     // ✅ Publish AFTER save (DB authoritative)
     if (order.AuctionId.HasValue)

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using MineralKingdom.Contracts.Auth;
 using MineralKingdom.Infrastructure.Configuration;
 using MineralKingdom.Infrastructure.Notifications;
+using MineralKingdom.Infrastructure.Payments.Realtime;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 
@@ -15,11 +16,14 @@ public sealed class ShippingInvoiceService
 
   private readonly EmailOutboxService _emails;
 
-  public ShippingInvoiceService(MineralKingdomDbContext db, IOptions<ShippingOptions> opts, EmailOutboxService emails)
+  private readonly IShippingInvoiceRealtimePublisher _realtime;
+
+  public ShippingInvoiceService(MineralKingdomDbContext db, IOptions<ShippingOptions> opts, EmailOutboxService emails, IShippingInvoiceRealtimePublisher realtime)
   {
     _db = db;
     _opts = opts.Value ?? new ShippingOptions();
     _emails = emails;
+    _realtime = realtime;
   }
 
   public async Task<(bool Ok, string? Error, ShippingInvoice? Invoice)> EnsureInvoiceForGroupAsync(
@@ -86,6 +90,8 @@ public sealed class ShippingInvoiceService
 
     _db.ShippingInvoices.Add(inv);
     await _db.SaveChangesAsync(ct);
+
+    try { await _realtime.PublishInvoiceAsync(inv.Id, now, ct); } catch { /* best-effort */ }
 
     // Enqueue SHIPPING_INVOICE_CREATED (best-effort; dedupe prevents duplicates)
     try
@@ -198,6 +204,9 @@ public sealed class ShippingInvoiceService
     });
 
     await _db.SaveChangesAsync(ct);
+
+    try { await _realtime.PublishInvoiceAsync(inv.Id, now, ct); } catch { /* best-effort */ }
+
     return (true, null);
   }
 
@@ -221,6 +230,9 @@ public sealed class ShippingInvoiceService
     inv.UpdatedAt = now;
 
     await _db.SaveChangesAsync(ct);
+
+    try { await _realtime.PublishInvoiceAsync(inv.Id, now, ct); } catch { /* best-effort */ }
+
     return (true, null);
   }
 
@@ -276,6 +288,7 @@ public sealed class ShippingInvoiceService
     });
 
     await _db.SaveChangesAsync(ct);
+    try { await _realtime.PublishInvoiceAsync(inv.Id, now, ct); } catch { /* best-effort */ }
     return (true, null);
   }
 }

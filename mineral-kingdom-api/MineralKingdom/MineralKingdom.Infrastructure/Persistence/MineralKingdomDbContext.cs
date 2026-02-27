@@ -31,7 +31,6 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<CheckoutHold> CheckoutHolds => Set<CheckoutHold>();
     public DbSet<CheckoutPayment> CheckoutPayments => Set<CheckoutPayment>();
     public DbSet<OrderPayment> OrderPayments => Set<OrderPayment>();
-
     public DbSet<PaymentWebhookEvent> PaymentWebhookEvents => Set<PaymentWebhookEvent>();
     public DbSet<CheckoutHoldItem> CheckoutHoldItems => Set<CheckoutHoldItem>();
     public DbSet<OrderLedgerEntry> OrderLedgerEntries => Set<OrderLedgerEntry>();
@@ -43,7 +42,8 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<EmailOutbox> EmailOutbox => Set<EmailOutbox>();
     public DbSet<UserNotificationPreferences> UserNotificationPreferences => Set<UserNotificationPreferences>();
     public DbSet<OrderRefund> OrderRefunds => Set<OrderRefund>();
-
+    public DbSet<SupportTicketMessage> SupportTicketMessages => Set<SupportTicketMessage>();
+    public DbSet<SupportTicketAccessToken> SupportTicketAccessTokens => Set<SupportTicketAccessToken>();
 
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -154,17 +154,71 @@ public class MineralKingdomDbContext : DbContext
         });
 
         modelBuilder.Entity<SupportTicket>(b =>
+{
+    b.ToTable("support_tickets");
+    b.HasKey(x => x.Id);
+
+    b.Property(x => x.TicketNumber).IsRequired().HasMaxLength(32);
+    b.HasIndex(x => x.TicketNumber).IsUnique();
+
+    b.Property(x => x.GuestEmail).HasMaxLength(320);
+
+    b.Property(x => x.Subject).IsRequired().HasMaxLength(200);
+    b.Property(x => x.Category).IsRequired().HasMaxLength(30);
+    b.Property(x => x.Priority).IsRequired().HasMaxLength(10).HasDefaultValue("NORMAL");
+    b.Property(x => x.Status).IsRequired().HasMaxLength(30).HasDefaultValue("OPEN");
+
+    b.HasIndex(x => new { x.Status, x.Priority, x.UpdatedAt });
+    b.HasIndex(x => x.GuestEmail);
+    b.HasIndex(x => x.CreatedByUserId);
+    b.HasIndex(x => x.AssignedToUserId);
+
+    b.HasOne(x => x.CreatedByUser)
+      .WithMany()
+      .HasForeignKey(x => x.CreatedByUserId)
+      .OnDelete(DeleteBehavior.SetNull);
+
+    b.HasOne(x => x.AssignedToUser)
+      .WithMany()
+      .HasForeignKey(x => x.AssignedToUserId)
+      .OnDelete(DeleteBehavior.SetNull);
+
+    b.HasMany(x => x.Messages)
+      .WithOne(m => m.Ticket)
+      .HasForeignKey(m => m.TicketId)
+      .OnDelete(DeleteBehavior.Cascade);
+
+    b.HasMany(x => x.AccessTokens)
+      .WithOne(t => t.Ticket)
+      .HasForeignKey(t => t.TicketId)
+      .OnDelete(DeleteBehavior.Cascade);
+});
+
+        modelBuilder.Entity<SupportTicketMessage>(b =>
         {
-            b.ToTable("support_tickets");
+            b.ToTable("support_ticket_messages");
             b.HasKey(x => x.Id);
 
-            b.Property(x => x.Email).IsRequired().HasMaxLength(320);
-            b.Property(x => x.Subject).IsRequired().HasMaxLength(200);
-            b.Property(x => x.Category).IsRequired().HasMaxLength(30);
-            b.Property(x => x.Message).IsRequired().HasMaxLength(4000);
-            b.Property(x => x.Status).IsRequired().HasMaxLength(30);
+            b.Property(x => x.AuthorType).IsRequired().HasMaxLength(20);
+            b.Property(x => x.BodyText).IsRequired().HasMaxLength(4000);
+            b.Property(x => x.IsInternalNote).HasDefaultValue(false);
 
-            b.HasIndex(x => x.CreatedAt);
+            b.HasIndex(x => new { x.TicketId, x.CreatedAt });
+
+            b.HasOne(x => x.AuthorUser)
+      .WithMany()
+      .HasForeignKey(x => x.AuthorUserId)
+      .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<SupportTicketAccessToken>(b =>
+        {
+            b.ToTable("support_ticket_access_tokens");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.TokenHash).IsRequired().HasMaxLength(128);
+            b.HasIndex(x => x.TokenHash).IsUnique();
+            b.HasIndex(x => x.TicketId);
         });
 
         modelBuilder.Entity<BackgroundJob>(b =>

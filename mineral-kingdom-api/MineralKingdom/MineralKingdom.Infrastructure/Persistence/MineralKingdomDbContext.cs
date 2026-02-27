@@ -2,6 +2,7 @@
 using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Auth;
 using MineralKingdom.Infrastructure.Persistence.Entities;
+using MineralKingdom.Infrastructure.Persistence.Entities.Analytics;
 using MineralKingdom.Infrastructure.Persistence.Entities.Cms;
 
 namespace MineralKingdom.Infrastructure.Persistence;
@@ -47,6 +48,8 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<SupportTicketAccessToken> SupportTicketAccessTokens => Set<SupportTicketAccessToken>();
     public DbSet<CmsPage> CmsPages => Set<CmsPage>();
     public DbSet<CmsPageRevision> CmsPageRevisions => Set<CmsPageRevision>();
+    public DbSet<DailySalesSummary> DailySalesSummaries => Set<DailySalesSummary>();
+    public DbSet<DailyAuctionSummary> DailyAuctionSummaries => Set<DailyAuctionSummary>();
 
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -726,6 +729,35 @@ public class MineralKingdomDbContext : DbContext
       .HasFilter("\"Status\" = 'PUBLISHED'");
 
             // we don’t FK to users everywhere in this project; store IDs.
+        });
+
+        modelBuilder.Entity<DailySalesSummary>(b =>
+        {
+            b.ToTable("daily_sales_summary");
+            b.HasKey(x => x.Date);
+
+            b.Property(x => x.Date).HasColumnType("date");
+            b.Property(x => x.GrossSalesCents).IsRequired();
+            b.Property(x => x.NetSalesCents).IsRequired();
+            b.Property(x => x.OrderCount).IsRequired();
+            b.Property(x => x.AovCents).IsRequired();
+            b.Property(x => x.StoreSalesCents).IsRequired();
+            b.Property(x => x.AuctionSalesCents).IsRequired();
+            b.Property(x => x.CreatedAt).IsRequired();
+        });
+
+        modelBuilder.Entity<DailyAuctionSummary>(b =>
+        {
+            b.ToTable("daily_auction_summary");
+            b.HasKey(x => x.Date);
+
+            b.Property(x => x.Date).HasColumnType("date");
+            b.Property(x => x.AuctionsClosed).IsRequired();
+            b.Property(x => x.AuctionsSold).IsRequired();
+            b.Property(x => x.AuctionsUnsold).IsRequired();
+            b.Property(x => x.CreatedAt).IsRequired();
+
+            b.HasIndex(x => x.Date);
         });
     }
 }

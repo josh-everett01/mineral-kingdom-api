@@ -1,6 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using MineralKingdom.Infrastructure.Analytics;
 using MineralKingdom.Infrastructure.Auctions;
 using MineralKingdom.Infrastructure.Auctions.Realtime;
 using MineralKingdom.Infrastructure.Configuration;
@@ -50,6 +51,8 @@ public class Program
               services.AddScoped<MineralKingdom.Infrastructure.Notifications.EmailOutboxService>();
               services.AddScoped<IJobQueue, DbJobQueue>();
               services.AddScoped<MineralKingdom.Infrastructure.Notifications.UserNotificationPreferencesService>();
+              services.AddScoped<AnalyticsSnapshotService>();
+              services.AddScoped<AnalyticsDailySnapshotJob>();
 
 
 

@@ -2,6 +2,7 @@
 using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Auth;
 using MineralKingdom.Infrastructure.Persistence.Entities;
+using MineralKingdom.Infrastructure.Persistence.Entities.Cms;
 
 namespace MineralKingdom.Infrastructure.Persistence;
 
@@ -44,6 +45,8 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<OrderRefund> OrderRefunds => Set<OrderRefund>();
     public DbSet<SupportTicketMessage> SupportTicketMessages => Set<SupportTicketMessage>();
     public DbSet<SupportTicketAccessToken> SupportTicketAccessTokens => Set<SupportTicketAccessToken>();
+    public DbSet<CmsPage> CmsPages => Set<CmsPage>();
+    public DbSet<CmsPageRevision> CmsPageRevisions => Set<CmsPageRevision>();
 
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -683,6 +686,46 @@ public class MineralKingdomDbContext : DbContext
             .WithMany(o => o.Refunds)
             .HasForeignKey(x => x.OrderId)
             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CmsPage>(b =>
+{
+    b.ToTable("cms_pages");
+    b.HasKey(x => x.Id);
+
+    b.Property(x => x.Slug).IsRequired().HasMaxLength(64);
+    b.HasIndex(x => x.Slug).IsUnique();
+
+    b.Property(x => x.Title).IsRequired().HasMaxLength(200);
+    b.Property(x => x.Category).IsRequired().HasMaxLength(20);
+    b.Property(x => x.IsActive).HasDefaultValue(true);
+
+    b.HasMany(x => x.Revisions)
+      .WithOne(r => r.Page)
+      .HasForeignKey(r => r.PageId)
+      .OnDelete(DeleteBehavior.Cascade);
+
+    b.HasIndex(x => new { x.Category, x.IsActive });
+});
+
+        modelBuilder.Entity<CmsPageRevision>(b =>
+        {
+            b.ToTable("cms_page_revisions");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.Status).IsRequired().HasMaxLength(20);
+            b.Property(x => x.ContentMarkdown).IsRequired().HasMaxLength(20000);
+            b.Property(x => x.ContentHtml).HasMaxLength(40000);
+            b.Property(x => x.ChangeSummary).HasMaxLength(500);
+
+            b.HasIndex(x => new { x.PageId, x.Status });
+
+            // Postgres partial unique index: only one published revision per page.
+            b.HasIndex(x => x.PageId)
+      .IsUnique()
+      .HasFilter("\"Status\" = 'PUBLISHED'");
+
+            // we don’t FK to users everywhere in this project; store IDs.
         });
     }
 }

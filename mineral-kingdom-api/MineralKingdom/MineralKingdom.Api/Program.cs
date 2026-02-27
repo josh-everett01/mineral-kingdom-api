@@ -152,6 +152,8 @@ public class Program
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Payments.IOrderRefundProvider, MineralKingdom.Infrastructure.Payments.StripeOrderRefundProvider>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Payments.IOrderRefundProvider, MineralKingdom.Infrastructure.Payments.PayPalOrderRefundProvider>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Admin.Queues.AdminQueuesService>();
+        builder.Services.AddScoped<MineralKingdom.Infrastructure.Support.SupportTicketService>();
+        builder.Services.AddScoped<MineralKingdom.Infrastructure.Cms.CmsPagesService>();
         // -------------------------
         // Authorization policy: unverified users cannot bid
         builder.Services.AddAuthorization(options =>

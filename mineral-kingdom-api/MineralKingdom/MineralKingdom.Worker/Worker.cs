@@ -80,6 +80,7 @@ public sealed class Worker : BackgroundService
         registry.Register(scope.ServiceProvider.GetRequiredService<AuctionClosingSweepJob>());
 
         registry.Register(scope.ServiceProvider.GetRequiredService<EmailDispatchJobHandler>());
+        registry.Register(scope.ServiceProvider.GetRequiredService<AnalyticsDailySnapshotJob>());
 
         var now = DateTimeOffset.UtcNow;
         var claimed = await claimer.ClaimDueAsync(_workerId, BatchSize, _lockTimeout, now, ct);

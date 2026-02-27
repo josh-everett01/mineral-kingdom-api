@@ -31,6 +31,11 @@ public sealed class CronSweepEnqueuer
     await EnqueueOncePerBucketAsync(JobSanitySweepType, bucketIso, now, ct);
     await EnqueueOncePerBucketAsync(JobRetrySweepType, bucketIso, now, ct);
     await EnqueueOncePerBucketAsync(JobTypes.AuctionClosingSweep, bucketIso, now, ct);
+
+    // Nightly analytics snapshot (previous UTC day)
+    var prevDay = now.UtcDateTime.Date.AddDays(-1);
+    var dayBucket = prevDay.ToString("yyyy-MM-dd");
+    await EnqueueOncePerBucketAsync(JobTypes.AnalyticsDailySnapshot, dayBucket, now, ct);
   }
 
   private async Task EnqueueOncePerBucketAsync(string jobType, string bucketIso, DateTimeOffset runAt, CancellationToken ct)

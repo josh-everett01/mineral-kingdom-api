@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MineralKingdom.Contracts.Auctions;
 using MineralKingdom.Contracts.Listings;
@@ -21,14 +22,18 @@ public sealed class MediaUploadService
   private readonly IObjectStorage _storage;
   private readonly MediaStorageOptions _opts;
 
+  private readonly ILogger<MediaUploadService> _logger;
+
   public MediaUploadService(
     MineralKingdomDbContext db,
     IObjectStorage storage,
-    IOptions<MediaStorageOptions> opts)
+    IOptions<MediaStorageOptions> opts,
+    ILogger<MediaUploadService> logger)
   {
     _db = db;
     _storage = storage;
     _opts = opts.Value;
+    _logger = logger;
   }
 
   public sealed record InitiateRequest(
@@ -269,6 +274,21 @@ public sealed class MediaUploadService
     }
 
     await _db.SaveChangesAsync(ct);
+
+    if (!string.IsNullOrWhiteSpace(row.StorageKey))
+    {
+      try
+      {
+        await _storage.DeleteAsync(_opts.Bucket, row.StorageKey, ct);
+      }
+      catch (Exception ex)
+      {
+        _logger.LogWarning(ex,
+          "Failed to delete media object from storage. Bucket={Bucket} Key={Key} MediaId={MediaId}",
+          _opts.Bucket, row.StorageKey, row.Id);
+      }
+    }
+
     return (true, null);
   }
 

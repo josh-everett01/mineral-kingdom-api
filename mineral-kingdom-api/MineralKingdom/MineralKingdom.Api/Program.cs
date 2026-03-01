@@ -316,6 +316,27 @@ public class Program
         app.UseAuthorization();
 
         app.MapControllers();
+
+        if (app.Environment.IsDevelopment())
+        {
+            using (var scope = app.Services.CreateScope())
+            {
+                var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("MediaStorageOptions");
+                var opts = scope.ServiceProvider.GetRequiredService<IOptions<MediaStorageOptions>>().Value;
+
+                logger.LogInformation(
+                  "MediaStorage config: Provider={Provider} Bucket={Bucket} ServiceUrl={ServiceUrl} Region={Region} CdnBaseUrl={CdnBaseUrl} UrlExpirationSeconds={ExpSeconds} AccessKeySet={AccessKeySet} SecretKeySet={SecretKeySet}",
+                  opts.Provider,
+                  opts.Bucket,
+                  string.IsNullOrWhiteSpace(opts.ServiceUrl) ? "(null)" : opts.ServiceUrl,
+                  string.IsNullOrWhiteSpace(opts.Region) ? "(null)" : opts.Region,
+                  opts.CdnBaseUrl,
+                  opts.UrlExpirationSeconds,
+                  !string.IsNullOrWhiteSpace(opts.AccessKey),
+                  !string.IsNullOrWhiteSpace(opts.SecretKey)
+                );
+            }
+        }
         app.Run();
     }
 }

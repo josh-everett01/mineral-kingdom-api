@@ -20,15 +20,24 @@ public sealed class S3ObjectStorage : IObjectStorage
 
     var cfg = new AmazonS3Config();
 
-    // S3-compatible (Spaces/MinIO): ServiceUrl + ForcePathStyle
+    // S3-compatible (R2/MinIO/Spaces): ServiceUrl + ForcePathStyle
     if (!string.IsNullOrWhiteSpace(opts.ServiceUrl))
     {
       cfg.ServiceURL = opts.ServiceUrl;
       cfg.ForcePathStyle = true;
-    }
 
-    if (!string.IsNullOrWhiteSpace(opts.Region))
-      cfg.RegionEndpoint = RegionEndpoint.GetBySystemName(opts.Region);
+      // R2 requires SigV4; SDK uses this region for signing
+      cfg.AuthenticationRegion = string.IsNullOrWhiteSpace(opts.Region) ? "us-east-1" : opts.Region;
+
+      // IMPORTANT: do NOT set RegionEndpoint when using ServiceURL,
+      // or the SDK may route/presign against AWS endpoints.
+    }
+    else
+    {
+      // Real AWS S3
+      if (!string.IsNullOrWhiteSpace(opts.Region))
+        cfg.RegionEndpoint = RegionEndpoint.GetBySystemName(opts.Region);
+    }
 
     _client = new AmazonS3Client(creds, cfg);
   }
@@ -74,5 +83,16 @@ public sealed class S3ObjectStorage : IObjectStorage
     {
       return false;
     }
+  }
+
+  public async Task DeleteAsync(string bucket, string key, CancellationToken ct)
+  {
+    var req = new DeleteObjectRequest
+    {
+      BucketName = bucket,
+      Key = key
+    };
+
+    await _client.DeleteObjectAsync(req, ct);
   }
 }

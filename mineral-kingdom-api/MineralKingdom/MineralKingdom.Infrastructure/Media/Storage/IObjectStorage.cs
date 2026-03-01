@@ -18,4 +18,6 @@ public interface IObjectStorage
   );
 
   Task<bool> ExistsAsync(string bucket, string key, CancellationToken ct);
+
+  Task DeleteAsync(string bucket, string key, CancellationToken ct);
 }

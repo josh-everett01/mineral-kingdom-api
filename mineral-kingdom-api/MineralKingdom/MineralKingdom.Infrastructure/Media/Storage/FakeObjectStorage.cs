@@ -21,6 +21,14 @@ public sealed class FakeObjectStorage : IObjectStorage
     return Task.FromResult(new SignedPutResult(url, expiresAt, headers));
   }
 
+  public List<(string Bucket, string Key)> Deleted { get; } = new();
+
+  public Task DeleteAsync(string bucket, string key, CancellationToken ct)
+  {
+    Deleted.Add((bucket, key));
+    return Task.CompletedTask;
+  }
+
   public Task<bool> ExistsAsync(string bucket, string key, CancellationToken ct)
     => Task.FromResult(true);
 }

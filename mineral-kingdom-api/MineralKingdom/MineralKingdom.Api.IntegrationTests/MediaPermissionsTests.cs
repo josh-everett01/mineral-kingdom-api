@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using MineralKingdom.Contracts.Auctions;
 using MineralKingdom.Contracts.Auth;
+using MineralKingdom.Infrastructure.Media.Storage;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using Xunit;
@@ -48,7 +49,7 @@ public sealed class MediaPermissionsTests
     await PatchRequiredFieldsAsync(client, owner.Id, listingId, mineralId);
 
     // Initiate + complete an IMAGE
-    var mediaId = await InitiateAndCompleteAsync(client, owner.Id, listingId,
+    var (mediaId, _) = await InitiateAndCompleteAsync(client, owner.Id, listingId,
       mediaType: "IMAGE",
       fileName: "img.jpg",
       contentType: "image/jpeg",
@@ -95,7 +96,7 @@ public sealed class MediaPermissionsTests
     var listingId = await CreateDraftListingAsync(client, owner.Id);
     await PatchRequiredFieldsAsync(client, owner.Id, listingId, mineralId);
 
-    var mediaId = await InitiateAndCompleteAsync(client, owner.Id, listingId,
+    var (mediaId, storageKey) = await InitiateAndCompleteAsync(client, owner.Id, listingId,
       mediaType: "IMAGE",
       fileName: "img.jpg",
       contentType: "image/jpeg",
@@ -106,12 +107,23 @@ public sealed class MediaPermissionsTests
 
     (await client.SendAsync(del)).StatusCode.Should().Be(HttpStatusCode.NoContent);
 
+    // Assert soft delete in DB
     using (var scope = factory.Services.CreateScope())
     {
       var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
       var row = await db.ListingMedia.AsNoTracking().SingleAsync(x => x.Id == mediaId);
       row.Status.Should().Be("DELETED");
       row.DeletedAt.Should().NotBeNull();
+    }
+
+    // Assert storage delete invoked (FakeObjectStorage)
+    using (var scope = factory.Services.CreateScope())
+    {
+      var storage = scope.ServiceProvider.GetRequiredService<IObjectStorage>();
+      storage.Should().BeOfType<FakeObjectStorage>();
+
+      var fake = (FakeObjectStorage)storage;
+      fake.Deleted.Should().Contain(x => x.Key == storageKey);
     }
   }
 
@@ -157,7 +169,7 @@ public sealed class MediaPermissionsTests
     (await client.SendAsync(patch)).StatusCode.Should().Be(HttpStatusCode.NoContent);
   }
 
-  private static async Task<Guid> InitiateAndCompleteAsync(
+  private static async Task<(Guid MediaId, string StorageKey)> InitiateAndCompleteAsync(
     HttpClient client,
     Guid ownerId,
     Guid listingId,
@@ -168,6 +180,7 @@ public sealed class MediaPermissionsTests
   {
     var init = new HttpRequestMessage(HttpMethod.Post, $"/api/admin/listings/{listingId}/media/initiate");
     AddOwnerHeaders(init, ownerId);
+
     init.Content = JsonContent.Create(new
     {
       mediaType,
@@ -188,7 +201,7 @@ public sealed class MediaPermissionsTests
     var compResp = await client.SendAsync(complete);
     compResp.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-    return body.MediaId;
+    return (body.MediaId, body.StorageKey);
   }
 
   private static async Task MigrateAsync(TestAppFactory factory)
@@ -225,7 +238,7 @@ public sealed class MediaPermissionsTests
     using var scope = factory.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
 
-    // Fix: minerals.Name is UNIQUE, so reuse if already seeded by other tests
+    // minerals.Name is UNIQUE, so reuse if already seeded by other tests
     var existing = await db.Minerals.AsNoTracking()
       .Where(x => x.Name == name)
       .Select(x => new { x.Id })

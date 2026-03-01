@@ -7,7 +7,6 @@ using MineralKingdom.Infrastructure.Configuration;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using MineralKingdom.Infrastructure.Security;
-using MineralKingdom.Worker.Jobs;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
@@ -84,7 +83,6 @@ public class Program
         builder.Services.AddScoped<IAuditLogger, AuditLogger>();
         builder.Services.AddScoped<PasswordResetTokenService>();
         builder.Services.AddScoped<PasswordResetService>();
-        builder.Services.AddScoped<NoopJobHandler>();
         builder.Services.AddScoped<JobClaimingService>();
         builder.Services.Configure<MediaStorageOptions>(builder.Configuration.GetSection("MK_MEDIA"));
         builder.Services.AddScoped<CartService>();

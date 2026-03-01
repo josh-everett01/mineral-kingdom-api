@@ -29,4 +29,8 @@
     <ProjectReference Include="..\MineralKingdom.Infrastructure\MineralKingdom.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+  <ProjectReference Include="..\MineralKingdom.Worker\MineralKingdom.Worker.csproj" />
+</ItemGroup>
+
 </Project>

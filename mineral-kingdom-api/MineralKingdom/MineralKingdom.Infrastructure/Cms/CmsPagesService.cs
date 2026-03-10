@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Markdig;
 using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Cms;
@@ -36,7 +37,12 @@ public sealed class CmsPagesService
         Published = p.Revisions
           .Where(r => r.Status == CmsRevisionStatuses.Published)
           .OrderByDescending(r => r.PublishedAt)
-          .Select(r => new { r.ContentHtml, r.ContentMarkdown, r.PublishedAt })
+          .Select(r => new
+          {
+            r.ContentHtml,
+            r.ContentMarkdown,
+            r.PublishedAt
+          })
           .FirstOrDefault()
       })
       .SingleOrDefaultAsync(ct);
@@ -52,6 +58,9 @@ public sealed class CmsPagesService
       row.Slug,
       row.Title,
       html,
+      row.Title,
+      BuildSeoDescription(row.Published.ContentMarkdown),
+      BuildCanonicalUrl(row.Slug),
       row.Published.PublishedAt.Value
     );
   }
@@ -155,7 +164,6 @@ public sealed class CmsPagesService
     if (page is null) return (false, "PAGE_NOT_FOUND", null);
     if (!page.IsActive) return (false, "PAGE_INACTIVE", null);
 
-    // Replace any existing draft by creating a new draft (simpler history)
     var now = DateTimeOffset.UtcNow;
 
     var draft = new CmsPageRevision
@@ -176,7 +184,6 @@ public sealed class CmsPagesService
     _db.CmsPageRevisions.Add(draft);
     page.UpdatedAt = now;
 
-    // Audit policy edits (and also marketing edits; low-cost to log both)
     await _audit.LogAsync(new AuditEvent(
       ActorUserId: editorUserId,
       ActorRole: actorRole,
@@ -195,14 +202,14 @@ public sealed class CmsPagesService
   }
 
   public async Task<(bool Ok, string? Error)> PublishAsync(
-  string slug,
-  Guid publisherUserId,
-  string actorRole,
-  Guid revisionId,
-  DateTimeOffset? effectiveAt,
-  string? ip,
-  string? userAgent,
-  CancellationToken ct)
+    string slug,
+    Guid publisherUserId,
+    string actorRole,
+    Guid revisionId,
+    DateTimeOffset? effectiveAt,
+    string? ip,
+    string? userAgent,
+    CancellationToken ct)
   {
     slug = (slug ?? "").Trim().ToLowerInvariant();
 
@@ -218,7 +225,6 @@ public sealed class CmsPagesService
 
     await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
-    // 1) Archive any prior published revision FIRST (separate SaveChanges to avoid transient unique violation)
     var published = await _db.CmsPageRevisions
       .Where(r => r.PageId == page.Id && r.Status == CmsRevisionStatuses.Published)
       .ToListAsync(ct);
@@ -229,7 +235,6 @@ public sealed class CmsPagesService
     if (published.Count > 0)
       await _db.SaveChangesAsync(ct);
 
-    // 2) Publish draft
     draft.Status = CmsRevisionStatuses.Published;
     draft.PublishedByUserId = publisherUserId;
     draft.PublishedAt = now;
@@ -254,5 +259,26 @@ public sealed class CmsPagesService
     await tx.CommitAsync(ct);
 
     return (true, null);
+  }
+
+  private static string BuildCanonicalUrl(string slug) => $"/{slug}";
+
+  private static string? BuildSeoDescription(string? markdown)
+  {
+    if (string.IsNullOrWhiteSpace(markdown)) return null;
+
+    var text = markdown
+      .Replace("#", " ")
+      .Replace("*", " ")
+      .Replace("_", " ")
+      .Replace("`", " ")
+      .Replace("\r", " ")
+      .Replace("\n", " ");
+
+    text = Regex.Replace(text, @"\s+", " ").Trim();
+
+    if (string.IsNullOrWhiteSpace(text)) return null;
+
+    return text.Length <= 160 ? text : text[..160];
   }
 }

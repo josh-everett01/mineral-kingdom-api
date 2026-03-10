@@ -30,6 +30,28 @@ public sealed class CmsPagesTests : IClassFixture<PostgresContainerFixture>
   }
 
   [Fact]
+  public async Task Seeded_public_pages_return_rich_public_dto()
+  {
+    await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
+    await MigrateAsync(factory);
+
+    using var client = factory.CreateClient();
+
+    var res = await client.GetAsync("/api/pages/privacy");
+    res.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    var dto = await res.Content.ReadFromJsonAsync<CmsPublicPageDto>();
+    dto.Should().NotBeNull();
+    dto!.Slug.Should().Be("privacy");
+    dto.Title.Should().Be("Privacy Policy");
+    dto.ContentHtml.Should().NotBeNullOrWhiteSpace();
+    dto.SeoTitle.Should().Be("Privacy Policy");
+    dto.SeoDescription.Should().NotBeNullOrWhiteSpace();
+    dto.CanonicalUrl.Should().Be("/privacy");
+    dto.PublishedAt.Should().BeAfter(DateTimeOffset.MinValue);
+  }
+
+  [Fact]
   public async Task Owner_can_publish_policy_page_and_public_renders_html()
   {
     await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
@@ -40,7 +62,6 @@ public sealed class CmsPagesTests : IClassFixture<PostgresContainerFixture>
     admin.DefaultRequestHeaders.Add(TestAuthDefaults.EmailVerifiedHeader, "true");
     admin.DefaultRequestHeaders.Add(TestAuthDefaults.RoleHeader, UserRoles.Owner);
 
-    // Create draft
     var draftRes = await admin.PostAsJsonAsync("/api/admin/pages/terms/draft",
       new UpsertDraftRequest("# Terms\n\nHello", "initial"));
     draftRes.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -48,12 +69,10 @@ public sealed class CmsPagesTests : IClassFixture<PostgresContainerFixture>
     var draft = await draftRes.Content.ReadFromJsonAsync<UpsertDraftResponse>();
     draft.Should().NotBeNull();
 
-    // Publish
     var pubRes = await admin.PostAsJsonAsync("/api/admin/pages/terms/publish",
       new PublishRevisionRequest(draft!.RevisionId, EffectiveAt: null));
     pubRes.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-    // Public fetch
     using var client = factory.CreateClient();
     var publicRes = await client.GetAsync("/api/pages/terms");
     publicRes.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -61,6 +80,8 @@ public sealed class CmsPagesTests : IClassFixture<PostgresContainerFixture>
     var dto = await publicRes.Content.ReadFromJsonAsync<CmsPublicPageDto>();
     dto!.Slug.Should().Be("terms");
     dto.ContentHtml.Should().Contain("<h1");
+    dto.SeoTitle.Should().Be("Terms & Conditions");
+    dto.CanonicalUrl.Should().Be("/terms");
   }
 
   [Fact]
@@ -90,7 +111,6 @@ public sealed class CmsPagesTests : IClassFixture<PostgresContainerFixture>
     staff.DefaultRequestHeaders.Add(TestAuthDefaults.EmailVerifiedHeader, "true");
     staff.DefaultRequestHeaders.Add(TestAuthDefaults.RoleHeader, UserRoles.Staff);
 
-    // Draft 1
     var d1Res = await staff.PostAsJsonAsync("/api/admin/pages/about/draft",
       new UpsertDraftRequest("# About\n\nv1", "v1"));
     var d1 = await d1Res.Content.ReadFromJsonAsync<UpsertDraftResponse>();
@@ -99,7 +119,6 @@ public sealed class CmsPagesTests : IClassFixture<PostgresContainerFixture>
       new PublishRevisionRequest(d1!.RevisionId, null));
     p1.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-    // Draft 2
     var d2Res = await staff.PostAsJsonAsync("/api/admin/pages/about/draft",
       new UpsertDraftRequest("# About\n\nv2", "v2"));
     var d2 = await d2Res.Content.ReadFromJsonAsync<UpsertDraftResponse>();
@@ -108,7 +127,6 @@ public sealed class CmsPagesTests : IClassFixture<PostgresContainerFixture>
       new PublishRevisionRequest(d2!.RevisionId, null));
     p2.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-    // Assert only one published exists for page
     await using var scope = factory.Services.CreateAsyncScope();
     var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
 

@@ -17,6 +17,9 @@ public sealed record CmsPublicPageDto(
   string Slug,
   string Title,
   string ContentHtml,
+  string? SeoTitle,
+  string? SeoDescription,
+  string CanonicalUrl,
   DateTimeOffset PublishedAt
 );
 

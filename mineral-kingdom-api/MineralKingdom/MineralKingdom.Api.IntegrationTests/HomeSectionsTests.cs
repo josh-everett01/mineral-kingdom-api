@@ -76,10 +76,12 @@ public sealed class HomeSectionsTests : IClassFixture<PostgresContainerFixture>
     dto!.FeaturedListings.Title.Should().Be("Featured Listings");
     dto.FeaturedListings.BrowseHref.Should().Be("/shop");
     dto.FeaturedListings.Items.Should().NotBeEmpty();
+    dto.FeaturedListings.Items.Should().OnlyContain(x => x.Href.StartsWith("/listing/"));
 
     dto.NewArrivals.Title.Should().Be("New Arrivals");
     dto.NewArrivals.BrowseHref.Should().Be("/shop");
     dto.NewArrivals.Items.Should().NotBeEmpty();
+    dto.NewArrivals.Items.Should().OnlyContain(x => x.Href.StartsWith("/listing/"));
 
     dto.EndingSoonAuctions.Title.Should().Be("Auctions Ending Soon");
     dto.EndingSoonAuctions.BrowseHref.Should().Be("/auctions");

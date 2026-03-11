@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using MineralKingdom.Api.Public;
 using MineralKingdom.Contracts.Auctions;
 using MineralKingdom.Contracts.Home;
 using MineralKingdom.Contracts.Listings;
@@ -43,20 +44,20 @@ public sealed class HomeSectionsController : ControllerBase
       .Where(m => m.Status == ListingMediaStatuses.Ready && m.DeletedAt == null);
 
     var offerBackedListingsRows = await (
-  from listing in publishedListings
-  join offer in activeOffers on listing.Id equals offer.ListingId
-  select new
-  {
-    listing.Id,
-    listing.Title,
-    listing.PublishedAt,
-    listing.CreatedAt,
-    offer.PriceCents,
-    offer.DiscountType,
-    offer.DiscountCents,
-    offer.DiscountPercentBps
-  })
-  .ToListAsync(ct);
+      from listing in publishedListings
+      join offer in activeOffers on listing.Id equals offer.ListingId
+      select new
+      {
+        listing.Id,
+        listing.Title,
+        listing.PublishedAt,
+        listing.CreatedAt,
+        offer.PriceCents,
+        offer.DiscountType,
+        offer.DiscountCents,
+        offer.DiscountPercentBps
+      })
+      .ToListAsync(ct);
 
     var offerBackedListings = offerBackedListingsRows
       .Select(x => new
@@ -102,25 +103,25 @@ public sealed class HomeSectionsController : ControllerBase
         EffectivePriceCents: x.EffectivePriceCents,
         CurrentBidCents: null,
         EndsAt: null,
-        Href: $"/shop/{x.Id}"
+        Href: PublicListingLinks.BuildHref(x.Id, x.Title)
       ))
       .ToList();
 
     var newArrivals = offerBackedListings
-        .OrderByDescending(x => x.PublishedAt ?? x.CreatedAt)
-        .Take(newArrivalsLimit)
-        .Select(x => new HomeSectionItemDto(
-          ListingId: x.Id,
-          AuctionId: null,
-          Title: x.Title ?? "Untitled listing",
-          PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.Id),
-          PriceCents: x.OfferPriceCents,
-          EffectivePriceCents: x.EffectivePriceCents,
-          CurrentBidCents: null,
-          EndsAt: null,
-          Href: $"/shop/{x.Id}"
-        ))
-        .ToList();
+      .OrderByDescending(x => x.PublishedAt ?? x.CreatedAt)
+      .Take(newArrivalsLimit)
+      .Select(x => new HomeSectionItemDto(
+        ListingId: x.Id,
+        AuctionId: null,
+        Title: x.Title ?? "Untitled listing",
+        PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.Id),
+        PriceCents: x.OfferPriceCents,
+        EffectivePriceCents: x.EffectivePriceCents,
+        CurrentBidCents: null,
+        EndsAt: null,
+        Href: PublicListingLinks.BuildHref(x.Id, x.Title)
+      ))
+      .ToList();
 
     var endingSoonRows = await (
       from auction in _db.Auctions.AsNoTracking()

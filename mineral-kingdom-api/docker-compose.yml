@@ -43,6 +43,7 @@ services:
       - .env
     environment:
       MK_DB__HOST: postgres   # override for docker network
+      DOTNET_ENVIRONMENT: Testing
     depends_on:
       postgres:
         condition: service_healthy

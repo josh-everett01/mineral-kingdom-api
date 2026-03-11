@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Api.Public;
 using MineralKingdom.Contracts.Auctions;
 using MineralKingdom.Contracts.Listings;
+using MineralKingdom.Infrastructure.Auctions;
 using MineralKingdom.Infrastructure.Persistence;
 
 namespace MineralKingdom.Api.Controllers;
@@ -34,7 +35,13 @@ public sealed class ListingsController : ControllerBase
     DateTimeOffset? PublishedAt,
     DateTimeOffset CreatedAt);
 
-  public sealed record MediaDto(Guid Id, string MediaType, string Url, int SortOrder, bool IsPrimary, string? Caption);
+  public sealed record MediaDto(
+    Guid Id,
+    string MediaType,
+    string Url,
+    int SortOrder,
+    bool IsPrimary,
+    string? Caption);
 
   public sealed record ListingDto(
     Guid Id,
@@ -42,7 +49,13 @@ public sealed class ListingsController : ControllerBase
     string? Description,
     string Status,
     Guid? PrimaryMineralId,
+    string? PrimaryMineral,
+    string? LocalityDisplay,
     string? CountryCode,
+    string? SizeClass,
+    bool IsFluorescent,
+    string? FluorescenceNotes,
+    string? ConditionNotes,
     decimal? LengthCm,
     decimal? WidthCm,
     decimal? HeightCm,
@@ -263,33 +276,84 @@ public sealed class ListingsController : ControllerBase
   [HttpGet("{id:guid}")]
   public async Task<ActionResult<ListingDto>> Get(Guid id, CancellationToken ct)
   {
-    var listing = await _db.Listings.AsNoTracking()
-      .SingleOrDefaultAsync(x => x.Id == id, ct);
+    var listing = await (
+      from l in _db.Listings.AsNoTracking()
+      join m in _db.Minerals.AsNoTracking() on l.PrimaryMineralId equals m.Id into mineralJoin
+      from mineral in mineralJoin.DefaultIfEmpty()
+      where l.Id == id
+      select new
+      {
+        Listing = l,
+        PrimaryMineral = mineral != null ? mineral.Name : null
+      })
+      .SingleOrDefaultAsync(ct);
 
     if (listing is null) return NotFound();
 
-    if (!string.Equals(listing.Status, ListingStatuses.Published, StringComparison.OrdinalIgnoreCase))
+    if (!string.Equals(listing.Listing.Status, ListingStatuses.Published, StringComparison.OrdinalIgnoreCase))
       return NotFound();
 
     var media = await _db.ListingMedia.AsNoTracking()
-      .Where(x => x.ListingId == id && x.Status == ListingMediaStatuses.Ready)
-      .OrderBy(x => x.SortOrder)
+      .Where(x => x.ListingId == id && x.Status == ListingMediaStatuses.Ready && x.DeletedAt == null)
+      .OrderByDescending(x => x.IsPrimary)
+      .ThenBy(x => x.SortOrder)
       .Select(x => new MediaDto(x.Id, x.MediaType, x.Url, x.SortOrder, x.IsPrimary, x.Caption))
       .ToListAsync(ct);
 
     return Ok(new ListingDto(
-      listing.Id,
-      listing.Title,
-      listing.Description,
-      listing.Status,
-      listing.PrimaryMineralId,
-      listing.CountryCode,
-      listing.LengthCm,
-      listing.WidthCm,
-      listing.HeightCm,
-      listing.WeightGrams,
-      listing.PublishedAt,
+      listing.Listing.Id,
+      listing.Listing.Title,
+      listing.Listing.Description,
+      listing.Listing.Status,
+      listing.Listing.PrimaryMineralId,
+      listing.PrimaryMineral,
+      listing.Listing.LocalityDisplay,
+      listing.Listing.CountryCode,
+      listing.Listing.SizeClass,
+      listing.Listing.IsFluorescent,
+      listing.Listing.FluorescenceNotes,
+      listing.Listing.ConditionNotes,
+      listing.Listing.LengthCm,
+      listing.Listing.WidthCm,
+      listing.Listing.HeightCm,
+      listing.Listing.WeightGrams,
+      listing.Listing.PublishedAt,
       media
+    ));
+  }
+
+  [HttpGet("{id:guid}/auction")]
+  public async Task<ActionResult<AuctionRealtimeSnapshot>> GetAuctionForListing(Guid id, CancellationToken ct)
+  {
+    var isPublished = await _db.Listings.AsNoTracking()
+      .AnyAsync(x => x.Id == id && x.Status == ListingStatuses.Published, ct);
+
+    if (!isPublished)
+      return NotFound();
+
+    var auction = await _db.Auctions.AsNoTracking()
+      .Where(x =>
+        x.ListingId == id &&
+        (x.Status == AuctionStatuses.Live || x.Status == AuctionStatuses.Closing))
+      .OrderBy(x => x.ClosingWindowEnd ?? x.CloseTime)
+      .FirstOrDefaultAsync(ct);
+
+    if (auction is null)
+      return NotFound();
+
+    var reserveMet = auction.ReservePriceCents is not null ? auction.ReserveMet : (bool?)null;
+    var minNext = auction.BidCount <= 0
+      ? auction.StartingPriceCents
+      : BidIncrementTable.MinToBeatCents(auction.CurrentPriceCents);
+
+    return Ok(new AuctionRealtimeSnapshot(
+      AuctionId: auction.Id,
+      CurrentPriceCents: auction.CurrentPriceCents,
+      BidCount: auction.BidCount,
+      ReserveMet: reserveMet,
+      Status: auction.Status,
+      ClosingWindowEnd: auction.ClosingWindowEnd,
+      MinimumNextBidCents: minNext
     ));
   }
 

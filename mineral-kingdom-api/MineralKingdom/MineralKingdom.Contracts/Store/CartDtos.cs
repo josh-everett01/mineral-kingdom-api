@@ -16,13 +16,23 @@ public static class CheckoutHoldStatuses
 
 public sealed record CartLineDto(
   Guid OfferId,
-  int Quantity
+  Guid ListingId,
+  string ListingHref,
+  string Title,
+  string? PrimaryImageUrl,
+  int Quantity,
+  int QuantityAvailable,
+  int PriceCents,
+  int EffectivePriceCents,
+  bool CanUpdateQuantity
 );
 
 public sealed record CartDto(
   Guid CartId,
   Guid? UserId,
   string Status,
+  int SubtotalCents,
+  IReadOnlyList<string> Warnings,
   IReadOnlyList<CartLineDto> Lines
 );
 
@@ -32,7 +42,7 @@ public sealed record UpsertCartLineRequest(
 );
 
 public sealed record StartCheckoutRequest(
-  Guid? CartId, // 
+  Guid? CartId,
   string? Email
 );
 
@@ -44,5 +54,5 @@ public sealed record StartCheckoutResponse(
 
 public sealed record CompleteCheckoutRequest(
   Guid HoldId,
-  string PaymentReference // “fake” payment id for now; later becomes Stripe/whatever
+  string PaymentReference
 );

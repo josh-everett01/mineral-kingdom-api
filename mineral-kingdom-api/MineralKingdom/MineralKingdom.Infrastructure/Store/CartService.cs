@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using MineralKingdom.Contracts.Listings;
 using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
@@ -13,7 +14,6 @@ public sealed class CartService
 
   public async Task<Cart> GetOrCreateAsync(Guid? userId, Guid? cartId, DateTimeOffset now, CancellationToken ct)
   {
-    // member cart: single ACTIVE cart per user
     if (userId is not null)
     {
       var existing = await _db.Carts
@@ -34,11 +34,9 @@ public sealed class CartService
       _db.Carts.Add(created);
       await _db.SaveChangesAsync(ct);
 
-      // reload with lines
       return await _db.Carts.Include(c => c.Lines).SingleAsync(c => c.Id == created.Id, ct);
     }
 
-    // guest cart: by cartId header
     if (cartId is not null)
     {
       var existing = await _db.Carts
@@ -63,14 +61,13 @@ public sealed class CartService
     return await _db.Carts.Include(c => c.Lines).SingleAsync(c => c.Id == guest.Id, ct);
   }
 
-
   public async Task<(bool Ok, string? Error)> UpsertLineAsync(
-  Guid cartId,
-  Guid? userId,
-  Guid offerId,
-  int quantity,
-  DateTimeOffset now,
-  CancellationToken ct)
+    Guid cartId,
+    Guid? userId,
+    Guid offerId,
+    int quantity,
+    DateTimeOffset now,
+    CancellationToken ct)
   {
     if (quantity <= 0 || quantity > 99) return (false, "INVALID_QUANTITY");
 
@@ -81,11 +78,18 @@ public sealed class CartService
     if (cart is null) return (false, "CART_NOT_FOUND");
     if (cart.Status != CartStatuses.Active) return (false, "CART_NOT_ACTIVE");
 
-    // Optional but recommended: validate offer exists/active
-    var offerExists = await _db.StoreOffers.AsNoTracking()
-      .AnyAsync(o => o.Id == offerId && o.DeletedAt == null, ct);
+    var offer = await _db.StoreOffers.AsNoTracking()
+      .SingleOrDefaultAsync(o => o.Id == offerId && o.DeletedAt == null, ct);
 
-    if (!offerExists) return (false, "OFFER_NOT_FOUND");
+    if (offer is null) return (false, "OFFER_NOT_FOUND");
+
+    var listing = await _db.Listings.AsNoTracking()
+      .SingleOrDefaultAsync(l => l.Id == offer.ListingId, ct);
+
+    if (listing is null) return (false, "LISTING_NOT_FOUND");
+
+    // v1 rule: most listings are unique 1-of-1 items
+    var normalizedQuantity = listing.QuantityAvailable <= 1 ? 1 : quantity;
 
     var line = cart.Lines.SingleOrDefault(x => x.OfferId == offerId);
     if (line is null)
@@ -95,16 +99,16 @@ public sealed class CartService
         Id = Guid.NewGuid(),
         CartId = cart.Id,
         OfferId = offerId,
-        Quantity = quantity,
+        Quantity = normalizedQuantity,
         CreatedAt = now,
         UpdatedAt = now
       };
 
-      _db.CartLines.Add(line);   // <-- forces INSERT
+      _db.CartLines.Add(line);
     }
     else
     {
-      line.Quantity = quantity;
+      line.Quantity = normalizedQuantity;
       line.UpdatedAt = now;
     }
 
@@ -114,13 +118,12 @@ public sealed class CartService
     return (true, null);
   }
 
-
   public async Task<(bool Ok, string? Error)> RemoveLineAsync(Cart cart, Guid offerId, DateTimeOffset now, CancellationToken ct)
   {
     if (cart.Status != CartStatuses.Active) return (false, "CART_NOT_ACTIVE");
 
     var line = cart.Lines.SingleOrDefault(x => x.OfferId == offerId);
-    if (line is null) return (true, null); // idempotent
+    if (line is null) return (true, null);
 
     _db.CartLines.Remove(line);
     cart.UpdatedAt = now;
@@ -137,20 +140,147 @@ public sealed class CartService
 
     if (cart is null) return null;
 
-    // member cart: must match user
     if (cart.UserId is not null && cart.UserId != userId) return null;
-
-    // guest cart: must be guest
     if (cart.UserId is null && userId is not null) return null;
 
     return cart;
   }
 
-  public static CartDto ToDto(Cart cart) =>
-    new(
+  public async Task<CartDto> ToDtoAsync(Cart cart, CancellationToken ct)
+  {
+    var offerIds = cart.Lines.Select(x => x.OfferId).Distinct().ToList();
+
+    if (offerIds.Count == 0)
+    {
+      return new CartDto(
+        CartId: cart.Id,
+        UserId: cart.UserId,
+        Status: cart.Status,
+        SubtotalCents: 0,
+        Warnings: new[]
+        {
+          "Items in your cart are not reserved. Availability is confirmed at checkout."
+        },
+        Lines: Array.Empty<CartLineDto>());
+    }
+
+    var offers = await _db.StoreOffers.AsNoTracking()
+      .Where(x => offerIds.Contains(x.Id) && x.DeletedAt == null)
+      .ToListAsync(ct);
+
+    var offerById = offers.ToDictionary(x => x.Id, x => x);
+
+    var listingIds = offers.Select(x => x.ListingId).Distinct().ToList();
+
+    var listingRows = await (
+      from listing in _db.Listings.AsNoTracking()
+      where listingIds.Contains(listing.Id)
+      select new
+      {
+        listing.Id,
+        listing.Title,
+        listing.QuantityAvailable
+      })
+      .ToListAsync(ct);
+
+    var listingById = listingRows.ToDictionary(x => x.Id, x => x);
+
+    var mediaRows = await _db.ListingMedia.AsNoTracking()
+      .Where(x =>
+        listingIds.Contains(x.ListingId) &&
+        x.Status == ListingMediaStatuses.Ready &&
+        x.DeletedAt == null)
+      .OrderByDescending(x => x.IsPrimary)
+      .ThenBy(x => x.SortOrder)
+      .Select(x => new
+      {
+        x.ListingId,
+        x.Url
+      })
+      .ToListAsync(ct);
+
+    var primaryImageByListingId = mediaRows
+      .GroupBy(x => x.ListingId)
+      .ToDictionary(g => g.Key, g => g.FirstOrDefault()?.Url);
+
+    var lines = cart.Lines
+      .Select(line =>
+      {
+        if (!offerById.TryGetValue(line.OfferId, out var offer))
+          return null;
+
+        if (!listingById.TryGetValue(offer.ListingId, out var listing))
+          return null;
+
+        var effectivePriceCents = DiscountPricing.ComputeEffectivePriceCents(
+          offer.PriceCents,
+          offer.DiscountType,
+          offer.DiscountCents,
+          offer.DiscountPercentBps);
+
+        var canUpdateQuantity = listing.QuantityAvailable > 1;
+
+        return new CartLineDto(
+          OfferId: line.OfferId,
+          ListingId: listing.Id,
+          ListingHref: BuildListingHref(listing.Id, listing.Title),
+          Title: listing.Title ?? "Untitled listing",
+          PrimaryImageUrl: primaryImageByListingId.GetValueOrDefault(listing.Id),
+          Quantity: canUpdateQuantity ? line.Quantity : 1,
+          QuantityAvailable: listing.QuantityAvailable,
+          PriceCents: offer.PriceCents,
+          EffectivePriceCents: effectivePriceCents,
+          CanUpdateQuantity: canUpdateQuantity
+        );
+      })
+      .Where(x => x is not null)
+      .Cast<CartLineDto>()
+      .ToList();
+
+    var subtotalCents = lines.Sum(x => x.EffectivePriceCents * x.Quantity);
+
+    return new CartDto(
       CartId: cart.Id,
       UserId: cart.UserId,
       Status: cart.Status,
-      Lines: cart.Lines.Select(l => new CartLineDto(l.OfferId, l.Quantity)).ToList()
+      SubtotalCents: subtotalCents,
+      Warnings: new[]
+      {
+        "Items in your cart are not reserved. Availability is confirmed at checkout."
+      },
+      Lines: lines
     );
+  }
+
+  private static string BuildListingHref(Guid listingId, string? title)
+  => $"/listing/{BuildSlug(title)}-{listingId:D}";
+
+  private static string BuildSlug(string? title)
+  {
+    if (string.IsNullOrWhiteSpace(title))
+      return "listing";
+
+    var chars = title.Trim().ToLowerInvariant();
+    var buffer = new List<char>(chars.Length);
+    var previousDash = false;
+
+    foreach (var ch in chars)
+    {
+      if (char.IsLetterOrDigit(ch))
+      {
+        buffer.Add(ch);
+        previousDash = false;
+        continue;
+      }
+
+      if (previousDash)
+        continue;
+
+      buffer.Add('-');
+      previousDash = true;
+    }
+
+    var slug = new string(buffer.ToArray()).Trim('-');
+    return string.IsNullOrWhiteSpace(slug) ? "listing" : slug;
+  }
 }

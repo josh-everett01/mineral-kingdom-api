@@ -40,6 +40,10 @@ public sealed class TestingE2ESeedController : ControllerBase
     var storeMediaId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2");
     var storeOfferId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3");
 
+    var storeListing2Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa4");
+    var storeMedia2Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa5");
+    var storeOffer2Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa6");
+
     var auctionListingId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1");
     var auctionMediaId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2");
     var auctionId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3");
@@ -126,10 +130,85 @@ public sealed class TestingE2ESeedController : ControllerBase
       ct);
 
     await ResetCheckoutStateAsync(
-storeListingId,
-storeOfferId,
-now,
-ct);
+      storeListingId,
+      storeOfferId,
+      now,
+      ct);
+
+    await UpsertListingAsync(
+      new Listing
+      {
+        Id = storeListing2Id,
+        Title = "Amethyst Cathedral",
+        Description = "Deterministic E2E store listing fixture B.",
+        Status = ListingStatuses.Published,
+        PrimaryMineralId = quartzMineralId,
+        LocalityDisplay = "Artigas, Uruguay",
+        CountryCode = "UY",
+        AdminArea1 = "Artigas",
+        MineName = "Artigas District",
+        LengthCm = 11.2m,
+        WidthCm = 6.4m,
+        HeightCm = 5.9m,
+        WeightGrams = 780,
+        SizeClass = "CABINET",
+        IsFluorescent = false,
+        FluorescenceNotes = null,
+        ConditionNotes = "Rich purple zoning with polished base.",
+        IsLot = false,
+        QuantityTotal = 1,
+        QuantityAvailable = 1,
+        CreatedAt = now.AddDays(-2),
+        UpdatedAt = now.AddDays(-2),
+        PublishedAt = now.AddDays(-2),
+        ArchivedAt = null
+      },
+      ct);
+
+    await UpsertListingMediaAsync(
+      new ListingMedia
+      {
+        Id = storeMedia2Id,
+        ListingId = storeListing2Id,
+        MediaType = ListingMediaTypes.Image,
+        Status = ListingMediaStatuses.Ready,
+        StorageKey = null,
+        OriginalFileName = "amethyst-cathedral.jpg",
+        ContentType = "image/jpeg",
+        ContentLengthBytes = 198400,
+        Url = "https://images.unsplash.com/photo-1510017803434-a899398421b3?auto=format&fit=crop&w=1200&q=80",
+        SortOrder = 0,
+        IsPrimary = true,
+        Caption = "Amethyst Cathedral primary image",
+        CreatedAt = now.AddDays(-2),
+        UpdatedAt = now.AddDays(-2),
+        DeletedAt = null
+      },
+      ct);
+
+    await UpsertStoreOfferAsync(
+      new StoreOffer
+      {
+        Id = storeOffer2Id,
+        ListingId = storeListing2Id,
+        PriceCents = 24900,
+        DiscountType = DiscountTypes.None,
+        DiscountCents = null,
+        DiscountPercentBps = null,
+        IsActive = true,
+        StartsAt = now.AddDays(-1),
+        EndsAt = now.AddDays(30),
+        CreatedAt = now.AddDays(-1),
+        UpdatedAt = now.AddDays(-1),
+        DeletedAt = null
+      },
+      ct);
+
+    await ResetCheckoutStateAsync(
+      storeListing2Id,
+      storeOffer2Id,
+      now,
+      ct);
 
     await UpsertListingAsync(
       new Listing
@@ -207,6 +286,8 @@ ct);
     return Ok(new E2ESeedResponse(
       StoreListingId: storeListingId,
       StoreOfferId: storeOfferId,
+      StoreListing2Id: storeListing2Id,
+      StoreOffer2Id: storeOffer2Id,
       AuctionListingId: auctionListingId,
       AuctionId: auctionId));
   }
@@ -349,10 +430,10 @@ ct);
   }
 
   private async Task ResetCheckoutStateAsync(
-  Guid listingId,
-  Guid offerId,
-  DateTimeOffset now,
-  CancellationToken ct)
+    Guid listingId,
+    Guid offerId,
+    DateTimeOffset now,
+    CancellationToken ct)
   {
     var activeHoldItems = await _db.CheckoutHoldItems
       .Where(x => x.ListingId == listingId && x.IsActive)
@@ -394,6 +475,8 @@ ct);
   public sealed record E2ESeedResponse(
     Guid StoreListingId,
     Guid StoreOfferId,
+    Guid StoreListing2Id,
+    Guid StoreOffer2Id,
     Guid AuctionListingId,
     Guid AuctionId);
 }

@@ -125,6 +125,12 @@ public sealed class TestingE2ESeedController : ControllerBase
       },
       ct);
 
+    await ResetCheckoutStateAsync(
+storeListingId,
+storeOfferId,
+now,
+ct);
+
     await UpsertListingAsync(
       new Listing
       {
@@ -337,6 +343,49 @@ public sealed class TestingE2ESeedController : ControllerBase
       existing.ReserveMet = seed.ReserveMet;
       existing.RelistOfAuctionId = seed.RelistOfAuctionId;
       existing.UpdatedAt = seed.UpdatedAt;
+    }
+
+    await _db.SaveChangesAsync(ct);
+  }
+
+  private async Task ResetCheckoutStateAsync(
+  Guid listingId,
+  Guid offerId,
+  DateTimeOffset now,
+  CancellationToken ct)
+  {
+    var activeHoldItems = await _db.CheckoutHoldItems
+      .Where(x => x.ListingId == listingId && x.IsActive)
+      .ToListAsync(ct);
+
+    if (activeHoldItems.Count == 0)
+      return;
+
+    var holdIds = activeHoldItems
+      .Select(x => x.HoldId)
+      .Distinct()
+      .ToList();
+
+    foreach (var item in activeHoldItems)
+    {
+      item.IsActive = false;
+    }
+
+    var holds = await _db.CheckoutHolds
+      .Where(x => holdIds.Contains(x.Id))
+      .ToListAsync(ct);
+
+    foreach (var hold in holds)
+    {
+      if (hold.Status == CheckoutHoldStatuses.Active)
+      {
+        hold.Status = CheckoutHoldStatuses.Expired;
+        hold.UpdatedAt = now;
+        if (hold.ExpiresAt > now)
+        {
+          hold.ExpiresAt = now;
+        }
+      }
     }
 
     await _db.SaveChangesAsync(ct);

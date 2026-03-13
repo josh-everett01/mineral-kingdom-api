@@ -44,4 +44,14 @@ public sealed class PaymentsController : ControllerBase
 
     return Ok(new PaymentStatusResponse(pay.Id, pay.Provider, pay.Status));
   }
+
+  [HttpGet("{id:guid}/confirmation")]
+  [AllowAnonymous]
+  public async Task<ActionResult<PaymentConfirmationResponse>> GetConfirmation([FromRoute] Guid id, CancellationToken ct)
+  {
+    var dto = await _payments.GetConfirmationAsync(id, ct);
+    if (dto is null) return NotFound(new { error = "PAYMENT_NOT_FOUND" });
+
+    return Ok(dto);
+  }
 }

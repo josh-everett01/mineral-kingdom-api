@@ -33,3 +33,16 @@ public sealed record PaymentStatusResponse(
   string Provider,
   string Status
 );
+
+public sealed record PaymentConfirmationResponse(
+  Guid PaymentId,
+  string Provider,
+  string PaymentStatus,
+  bool IsConfirmed,
+  Guid? OrderId,
+  string? OrderNumber,
+  string? OrderStatus,
+  int? OrderTotalCents,
+  string? OrderCurrencyCode,
+  string? GuestEmail
+);

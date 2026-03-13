@@ -53,9 +53,8 @@ public sealed class CheckoutPaymentService
     // Load offers for pricing snapshot
     var offerIds = cart.Lines.Select(l => l.OfferId).ToList();
     var offers = await _db.StoreOffers
-  .Where(o => offerIds.Contains(o.Id))
-  .ToListAsync(ct);
-
+      .Where(o => offerIds.Contains(o.Id))
+      .ToListAsync(ct);
 
     if (offers.Count != offerIds.Count)
       return (false, "OFFER_NOT_FOUND", null, null);
@@ -132,6 +131,33 @@ public sealed class CheckoutPaymentService
 
   public async Task<CheckoutPayment?> GetAsync(Guid id, CancellationToken ct)
     => await _db.CheckoutPayments.SingleOrDefaultAsync(p => p.Id == id, ct);
+
+  public async Task<PaymentConfirmationResponse?> GetConfirmationAsync(Guid id, CancellationToken ct)
+  {
+    var payment = await _db.CheckoutPayments
+      .AsNoTracking()
+      .SingleOrDefaultAsync(p => p.Id == id, ct);
+
+    if (payment is null)
+      return null;
+
+    var order = await _db.Orders
+      .AsNoTracking()
+      .SingleOrDefaultAsync(o => o.CheckoutHoldId == payment.HoldId, ct);
+
+    return new PaymentConfirmationResponse(
+      PaymentId: payment.Id,
+      Provider: payment.Provider,
+      PaymentStatus: payment.Status,
+      IsConfirmed: order is not null,
+      OrderId: order?.Id,
+      OrderNumber: order?.OrderNumber,
+      OrderStatus: order?.Status,
+      OrderTotalCents: order?.TotalCents,
+      OrderCurrencyCode: order?.CurrencyCode,
+      GuestEmail: order?.GuestEmail
+    );
+  }
 
   private ICheckoutPaymentProvider? ResolveProvider(string requestedProvider)
   {

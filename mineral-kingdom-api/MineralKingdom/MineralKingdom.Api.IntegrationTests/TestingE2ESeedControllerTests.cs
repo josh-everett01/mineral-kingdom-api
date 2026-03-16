@@ -3,8 +3,10 @@ using System.Net.Http.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using MineralKingdom.Contracts.Auctions;
 using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Persistence;
+using MineralKingdom.Infrastructure.Persistence.Entities;
 using Xunit;
 
 namespace MineralKingdom.Api.IntegrationTests;
@@ -186,6 +188,56 @@ public sealed class TestingE2ESeedControllerTests : IClassFixture<PostgresContai
 
     holdItems.Should().NotBeEmpty();
     holdItems.Count(x => x.IsActive).Should().Be(1);
+  }
+
+  [Fact]
+  public async Task Seed_endpoint_resets_active_live_auction_for_seeded_auction_listing()
+  {
+    await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
+    using var client = factory.CreateClient();
+
+    var seedRes = await client.PostAsync("/api/testing/e2e/seed", content: null);
+    seedRes.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    await using var scope = factory.Services.CreateAsyncScope();
+    var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+    var listingId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1");
+    var seededAuctionId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3");
+
+    db.Auctions.Add(new Auction
+    {
+      Id = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb9"),
+      ListingId = listingId,
+      Status = AuctionStatuses.Live,
+      StartingPriceCents = 9500,
+      ReservePriceCents = 14000,
+      StartTime = DateTimeOffset.UtcNow.AddHours(-1),
+      CloseTime = DateTimeOffset.UtcNow.AddDays(1),
+      ClosingWindowEnd = null,
+      CurrentPriceCents = 9500,
+      CurrentLeaderUserId = null,
+      CurrentLeaderMaxCents = null,
+      BidCount = 0,
+      ReserveMet = false,
+      RelistOfAuctionId = null,
+      CreatedAt = DateTimeOffset.UtcNow,
+      UpdatedAt = DateTimeOffset.UtcNow
+    });
+
+    await db.SaveChangesAsync();
+
+    var reseedRes = await client.PostAsync("/api/testing/e2e/seed", content: null);
+    reseedRes.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    var listingAuctionRes = await client.GetAsync($"/api/listings/{listingId}/auction");
+    listingAuctionRes.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    var dto = await listingAuctionRes.Content.ReadFromJsonAsync<AuctionRealtimeSnapshot>();
+    dto.Should().NotBeNull();
+    dto!.AuctionId.Should().Be(seededAuctionId);
+    dto.CurrentPriceCents.Should().Be(11200);
+    dto.BidCount.Should().Be(4);
   }
 
   private sealed record E2ESeedResponse(

@@ -131,7 +131,6 @@ public sealed class TestingE2ESeedController : ControllerBase
 
     await ResetCheckoutStateAsync(
       storeListingId,
-      storeOfferId,
       now,
       ct);
 
@@ -206,7 +205,6 @@ public sealed class TestingE2ESeedController : ControllerBase
 
     await ResetCheckoutStateAsync(
       storeListing2Id,
-      storeOffer2Id,
       now,
       ct);
 
@@ -259,6 +257,12 @@ public sealed class TestingE2ESeedController : ControllerBase
         UpdatedAt = now.AddDays(-1),
         DeletedAt = null
       },
+      ct);
+
+    await ResetAuctionStateAsync(
+      auctionListingId,
+      auctionId,
+      now,
       ct);
 
     await UpsertAuctionAsync(
@@ -431,7 +435,6 @@ public sealed class TestingE2ESeedController : ControllerBase
 
   private async Task ResetCheckoutStateAsync(
     Guid listingId,
-    Guid offerId,
     DateTimeOffset now,
     CancellationToken ct)
   {
@@ -467,6 +470,35 @@ public sealed class TestingE2ESeedController : ControllerBase
           hold.ExpiresAt = now;
         }
       }
+    }
+
+    await _db.SaveChangesAsync(ct);
+  }
+
+  private async Task ResetAuctionStateAsync(
+    Guid listingId,
+    Guid seededAuctionId,
+    DateTimeOffset now,
+    CancellationToken ct)
+  {
+    var otherLiveOrClosingAuctions = await _db.Auctions
+      .Where(x =>
+        x.ListingId == listingId &&
+        x.Id != seededAuctionId &&
+        (x.Status == AuctionStatuses.Live || x.Status == AuctionStatuses.Closing))
+      .ToListAsync(ct);
+
+    foreach (var auction in otherLiveOrClosingAuctions)
+    {
+      auction.Status = AuctionStatuses.ClosedNotSold;
+      auction.UpdatedAt = now;
+      auction.CloseTime = now;
+      auction.ClosingWindowEnd = now;
+      auction.CurrentLeaderUserId = null;
+      auction.CurrentLeaderMaxCents = null;
+      auction.BidCount = 0;
+      auction.CurrentPriceCents = auction.StartingPriceCents;
+      auction.ReserveMet = false;
     }
 
     await _db.SaveChangesAsync(ct);

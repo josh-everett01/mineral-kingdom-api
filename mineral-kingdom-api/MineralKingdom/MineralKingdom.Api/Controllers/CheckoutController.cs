@@ -26,6 +26,68 @@ public sealed class CheckoutController : ControllerBase
     return Guid.TryParse(raw, out var id) ? id : null;
   }
 
+  [HttpGet("active")]
+  [AllowAnonymous]
+  public async Task<ActionResult<ActiveCheckoutResponse>> Active(
+    [FromHeader(Name = "X-Cart-Id")] Guid? cartIdHeader,
+    CancellationToken ct)
+  {
+    var now = DateTimeOffset.UtcNow;
+    var userId = User.Identity?.IsAuthenticated == true ? TryGetUserId() : null;
+
+    var cart = await _carts.GetOrCreateAsync(userId, cartIdHeader, now, ct);
+    var (ok, err, hold) = await _checkout.GetActiveCheckoutAsync(cart, userId, now, ct);
+
+    if (!ok)
+    {
+      return err switch
+      {
+        "FORBIDDEN" => Forbid(),
+        _ => BadRequest(new { error = err })
+      };
+    }
+
+    Response.Headers["X-Cart-Id"] = cart.Id.ToString();
+
+    return Ok(new ActiveCheckoutResponse(
+      Active: hold is not null,
+      CartId: cart.Id,
+      HoldId: hold?.Id,
+      ExpiresAt: hold?.ExpiresAt,
+      GuestEmail: hold?.GuestEmail,
+      Status: hold?.Status
+    ));
+  }
+
+  [HttpPost("reset")]
+  [AllowAnonymous]
+  public async Task<ActionResult<ResetCheckoutResponse>> Reset(
+    [FromHeader(Name = "X-Cart-Id")] Guid? cartIdHeader,
+    CancellationToken ct)
+  {
+    var now = DateTimeOffset.UtcNow;
+    var userId = User.Identity?.IsAuthenticated == true ? TryGetUserId() : null;
+
+    var cart = await _carts.GetOrCreateAsync(userId, cartIdHeader, now, ct);
+    var (ok, err) = await _checkout.ResetActiveCheckoutAsync(cart, userId, now, ct);
+
+    if (!ok)
+    {
+      return err switch
+      {
+        "FORBIDDEN" => Forbid(),
+        _ => BadRequest(new { error = err })
+      };
+    }
+
+    Response.Headers["X-Cart-Id"] = cart.Id.ToString();
+
+    return Ok(new ResetCheckoutResponse(
+      Reset: true,
+      CartId: cart.Id
+    ));
+  }
+
   [HttpPost("start")]
   [AllowAnonymous]
   public async Task<ActionResult<StartCheckoutResponse>> Start(
@@ -36,8 +98,6 @@ public sealed class CheckoutController : ControllerBase
     var now = DateTimeOffset.UtcNow;
 
     var userId = User.Identity?.IsAuthenticated == true ? TryGetUserId() : null;
-
-    // for guests, cartId must come from header or request (support both)
     var cartId = cartIdHeader ?? req.CartId;
 
     var cart = await _carts.GetOrCreateAsync(userId, cartId, now, ct);
@@ -57,15 +117,13 @@ public sealed class CheckoutController : ControllerBase
   [HttpPost("complete")]
   [AllowAnonymous]
   public async Task<ActionResult> Complete(
-  [FromBody] CompleteCheckoutRequest req,
-  [FromHeader(Name = "X-Cart-Id")] Guid? cartIdHeader,
-  CancellationToken ct)
+    [FromBody] CompleteCheckoutRequest req,
+    [FromHeader(Name = "X-Cart-Id")] Guid? cartIdHeader,
+    CancellationToken ct)
   {
     var now = DateTimeOffset.UtcNow;
     var userId = User.Identity?.IsAuthenticated == true ? TryGetUserId() : null;
 
-    // IMPORTANT (S4-3): client redirects/returns NEVER confirm payment.
-    // This endpoint only records the return for UX/debugging.
     var (ok, err) = await _checkout.RecordClientReturnAsync(
       req.HoldId,
       userId,
@@ -83,7 +141,6 @@ public sealed class CheckoutController : ControllerBase
       };
     }
 
-    // Preserve guest cart continuity behavior
     if (cartIdHeader.HasValue)
       Response.Headers["X-Cart-Id"] = cartIdHeader.Value.ToString();
 
@@ -93,8 +150,8 @@ public sealed class CheckoutController : ControllerBase
   [HttpPost("heartbeat")]
   [AllowAnonymous]
   public async Task<ActionResult<CheckoutHeartbeatResponse>> Heartbeat(
-  [FromBody] CheckoutHeartbeatRequest req,
-  CancellationToken ct)
+    [FromBody] CheckoutHeartbeatRequest req,
+    CancellationToken ct)
   {
     var now = DateTimeOffset.UtcNow;
     var userId = User.Identity?.IsAuthenticated == true ? TryGetUserId() : null;
@@ -106,6 +163,7 @@ public sealed class CheckoutController : ControllerBase
       {
         "HOLD_NOT_FOUND" => NotFound(new { error = err }),
         "HOLD_EXPIRED" => BadRequest(new { error = err }),
+        "FORBIDDEN" => Forbid(),
         _ => BadRequest(new { error = err })
       };
     }

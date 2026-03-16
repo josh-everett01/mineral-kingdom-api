@@ -52,6 +52,20 @@ public sealed record StartCheckoutResponse(
   DateTimeOffset ExpiresAt
 );
 
+public sealed record ActiveCheckoutResponse(
+  bool Active,
+  Guid CartId,
+  Guid? HoldId,
+  DateTimeOffset? ExpiresAt,
+  string? GuestEmail,
+  string? Status
+);
+
+public sealed record ResetCheckoutResponse(
+  bool Reset,
+  Guid CartId
+);
+
 public sealed record CompleteCheckoutRequest(
   Guid HoldId,
   string PaymentReference

@@ -20,6 +20,66 @@ public sealed class CheckoutService
     _opts = opts.Value;
   }
 
+  public async Task<(bool Ok, string? Error, CheckoutHold? Hold)> GetActiveCheckoutAsync(
+    Cart cart,
+    Guid? userId,
+    DateTimeOffset now,
+    CancellationToken ct)
+  {
+    var hold = await _db.CheckoutHolds
+      .SingleOrDefaultAsync(
+        h => h.CartId == cart.Id && h.Status == CheckoutHoldStatuses.Active,
+        ct);
+
+    if (hold is null)
+      return (true, null, null);
+
+    if (hold.UserId.HasValue && hold.UserId != userId)
+      return (false, "FORBIDDEN", null);
+
+    if (now > hold.ExpiresAt)
+    {
+      hold.Status = CheckoutHoldStatuses.Expired;
+      hold.UpdatedAt = now;
+
+      await DeactivateHoldItemsAsync(hold.Id, ct);
+      await _db.SaveChangesAsync(ct);
+
+      return (true, null, null);
+    }
+
+    return (true, null, hold);
+  }
+
+  public async Task<(bool Ok, string? Error)> ResetActiveCheckoutAsync(
+    Cart cart,
+    Guid? userId,
+    DateTimeOffset now,
+    CancellationToken ct)
+  {
+    var hold = await _db.CheckoutHolds
+      .SingleOrDefaultAsync(
+        h => h.CartId == cart.Id && h.Status == CheckoutHoldStatuses.Active,
+        ct);
+
+    if (hold is null)
+      return (true, null);
+
+    if (hold.UserId.HasValue && hold.UserId != userId)
+      return (false, "FORBIDDEN");
+
+    hold.Status = CheckoutHoldStatuses.Expired;
+    hold.UpdatedAt = now;
+
+    if (hold.ExpiresAt > now)
+      hold.ExpiresAt = now;
+
+    await DeactivateHoldItemsAsync(hold.Id, ct);
+    await _db.SaveChangesAsync(ct);
+
+    return (true, null);
+  }
+
   public async Task<(bool Ok, string? Error, CheckoutHold? Hold)> StartCheckoutAsync(
     Cart cart,
     Guid? userId,
@@ -40,7 +100,6 @@ public sealed class CheckoutService
       normalizedGuestEmail = guestEmail.Trim().ToLowerInvariant();
     }
 
-    // Resolve offer -> listing IDs for cart lines
     var offerIds = cart.Lines.Select(l => l.OfferId).Distinct().ToList();
 
     var offers = await _db.StoreOffers
@@ -59,7 +118,6 @@ public sealed class CheckoutService
       .Distinct()
       .ToList();
 
-    // ✅ Defensive: ensure listing is purchasable (qty=1 world)
     var listingIds = holdTargets.Select(x => x.ListingId).Distinct().ToList();
 
     var listings = await _db.Listings
@@ -79,8 +137,6 @@ public sealed class CheckoutService
     if (listings.Any(l => l.QuantityAvailable < 1))
       return (false, "OUT_OF_STOCK", null);
 
-
-    // Reuse existing active hold for this cart if still valid
     var existing = await _db.CheckoutHolds
       .SingleOrDefaultAsync(h =>
         h.CartId == cart.Id &&
@@ -100,7 +156,6 @@ public sealed class CheckoutService
       }
       else
       {
-        // If guest, require email match for reuse
         if (userId is null && !string.Equals(existing.GuestEmail, normalizedGuestEmail, StringComparison.Ordinal))
           return (false, "EMAIL_MISMATCH", null);
 
@@ -123,7 +178,6 @@ public sealed class CheckoutService
         UpdatedAt = now,
         ExpiresAt = now.AddMinutes(_opts.HoldInitialMinutes),
       };
-
 
       _db.CheckoutHolds.Add(hold);
 
@@ -161,6 +215,9 @@ public sealed class CheckoutService
     var hold = await _db.CheckoutHolds.SingleOrDefaultAsync(h => h.Id == holdId, ct);
     if (hold is null) return (false, "HOLD_NOT_FOUND", null);
 
+    if (hold.UserId.HasValue && hold.UserId != userId)
+      return (false, "FORBIDDEN", null);
+
     if (hold.Status != CheckoutHoldStatuses.Active)
       return (false, "HOLD_NOT_ACTIVE", null);
 
@@ -170,12 +227,10 @@ public sealed class CheckoutService
       hold.UpdatedAt = now;
 
       await DeactivateHoldItemsAsync(hold.Id, ct);
-
       await _db.SaveChangesAsync(ct);
 
       return (false, "HOLD_EXPIRED", null);
     }
-
 
     var candidate = now.AddMinutes(_opts.HoldInitialMinutes);
     var max = hold.CreatedAt.AddMinutes(_opts.HoldMaxMinutes);
@@ -219,17 +274,16 @@ public sealed class CheckoutService
   }
 
   public async Task<(bool Ok, string? Error)> ConfirmPaidFromWebhookAsync(
-  Guid holdId,
-  string paymentReference,
-  DateTimeOffset now,
-  CancellationToken ct)
+    Guid holdId,
+    string paymentReference,
+    DateTimeOffset now,
+    CancellationToken ct)
   {
     await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
     var hold = await _db.CheckoutHolds.SingleOrDefaultAsync(h => h.Id == holdId, ct);
     if (hold is null) return (false, "HOLD_NOT_FOUND");
 
-    // Idempotency: if already completed, ensure order exists and return OK
     if (hold.Status == CheckoutHoldStatuses.Completed)
     {
       var existingOrder = await _db.Orders.AsNoTracking()
@@ -237,7 +291,6 @@ public sealed class CheckoutService
 
       if (existingOrder is not null)
         return (true, null);
-      // If hold is completed but order missing (should be rare), we continue and attempt create.
     }
 
     if (hold.Status != CheckoutHoldStatuses.Active)
@@ -252,26 +305,20 @@ public sealed class CheckoutService
       return (false, "HOLD_EXPIRED");
     }
 
-    // Mark hold completed
     hold.CompletedAt = now;
     hold.PaymentReference = paymentReference;
     hold.Status = CheckoutHoldStatuses.Completed;
     hold.UpdatedAt = now;
 
-    // Mark listing(s) SOLD and disable offer(s)
     await MarkHoldItemsAsSoldAsync(hold.Id, now, ct);
-
-    // Deactivate hold items
     await DeactivateHoldItemsAsync(hold.Id, ct);
 
-    // Cart becomes checked out
     var cart = await _db.Carts.SingleAsync(c => c.Id == hold.CartId, ct);
     cart.Status = CartStatuses.CheckedOut;
     cart.UpdatedAt = now;
 
     try
     {
-      // Create paid order once per hold
       var existing = await _db.Orders.AsNoTracking()
         .SingleOrDefaultAsync(o => o.CheckoutHoldId == hold.Id, ct);
 
@@ -308,14 +355,12 @@ public sealed class CheckoutService
     {
       await tx.RollbackAsync(ct);
 
-      // If an order already exists for THIS hold, treat as webhook retry success (idempotent).
       var existingForHold = await _db.Orders.AsNoTracking()
         .AnyAsync(o => o.CheckoutHoldId == holdId, ct);
 
       if (existingForHold)
         return (true, null);
 
-      // Otherwise, someone else already completed checkout for this cart / another hold won.
       return (false, "PAYMENT_ALREADY_COMPLETED");
     }
   }
@@ -352,10 +397,9 @@ public sealed class CheckoutService
   private async Task MarkHoldItemsAsSoldAsync(Guid holdId, DateTimeOffset now, CancellationToken ct)
   {
     var holdItems = await _db.CheckoutHoldItems
-  .Where(i => i.HoldId == holdId)   // <-- remove && i.IsActive
-  .Select(i => new { i.ListingId, i.OfferId })
-  .ToListAsync(ct);
-
+      .Where(i => i.HoldId == holdId)
+      .Select(i => new { i.ListingId, i.OfferId })
+      .ToListAsync(ct);
 
     if (holdItems.Count == 0) return;
 
@@ -365,8 +409,8 @@ public sealed class CheckoutService
     var listings = await _db.Listings.Where(l => listingIds.Contains(l.Id)).ToListAsync(ct);
     foreach (var l in listings)
     {
-      l.Status = MineralKingdom.Contracts.Listings.ListingStatuses.Sold;
-      l.QuantityAvailable = 0; // qty=1 world for now
+      l.Status = ListingStatuses.Sold;
+      l.QuantityAvailable = 0;
       l.UpdatedAt = now;
     }
 
@@ -377,15 +421,15 @@ public sealed class CheckoutService
     foreach (var o in offers)
     {
       o.IsActive = false;
-      o.EndsAt ??= now; // optional
+      o.EndsAt ??= now;
       o.UpdatedAt = now;
     }
   }
 
   private async Task<Order> BuildPaidOrderFromHoldAsync(
-  CheckoutHold hold,
-  DateTimeOffset now,
-  CancellationToken ct)
+    CheckoutHold hold,
+    DateTimeOffset now,
+    CancellationToken ct)
   {
     var cart = await _db.Carts
       .Include(c => c.Lines)
@@ -438,17 +482,13 @@ public sealed class CheckoutService
         OrderId = order.Id,
         OfferId = offer.Id,
         ListingId = offer.ListingId,
-
         UnitPriceCents = unitPrice,
         UnitDiscountCents = unitDiscount,
         UnitFinalPriceCents = unitFinal,
-
         Quantity = qty,
-
         LineSubtotalCents = lineSubtotal,
         LineDiscountCents = lineDiscount,
         LineTotalCents = lineTotal,
-
         CreatedAt = now,
         UpdatedAt = now
       });

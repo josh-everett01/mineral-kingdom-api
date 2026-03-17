@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
+using MineralKingdom.Infrastructure.Store.Realtime;
 
 namespace MineralKingdom.Infrastructure.Store;
 
@@ -9,9 +10,11 @@ public sealed class CartService
 {
   private readonly MineralKingdomDbContext _db;
 
-  public CartService(MineralKingdomDbContext db)
+  private readonly ICartRealtimePublisher _cartRealtimePublisher;
+  public CartService(MineralKingdomDbContext db, ICartRealtimePublisher cartRealtimePublisher)
   {
     _db = db;
+    _cartRealtimePublisher = cartRealtimePublisher;
   }
 
   public async Task<Cart> GetOrCreateAsync(
@@ -186,25 +189,25 @@ public sealed class CartService
     );
   }
 
-  public async Task RemoveSoldOfferFromOtherActiveCartsAsync(
-    Guid purchasedCartId,
-    Guid offerId,
-    Guid listingId,
-    string listingTitle,
-    DateTimeOffset now,
-    CancellationToken ct)
+  public async Task<IReadOnlyCollection<Guid>> RemoveSoldOfferFromOtherActiveCartsAsync(
+  Guid purchasedCartId,
+  Guid offerId,
+  Guid listingId,
+  string listingTitle,
+  DateTimeOffset now,
+  CancellationToken ct)
   {
     var affectedLines = await _db.CartLines
-          .Include(x => x.Cart)
-          .Where(x =>
-            x.OfferId == offerId &&
-            x.CartId != purchasedCartId &&
-            x.Cart != null &&
-            x.Cart.Status == CartStatuses.Active)
-          .ToListAsync(ct);
+      .Include(x => x.Cart)
+      .Where(x =>
+        x.OfferId == offerId &&
+        x.CartId != purchasedCartId &&
+        x.Cart != null &&
+        x.Cart.Status == CartStatuses.Active)
+      .ToListAsync(ct);
 
     if (affectedLines.Count == 0)
-      return;
+      return Array.Empty<Guid>();
 
     var affectedCartIds = affectedLines
       .Select(x => x.CartId)
@@ -245,6 +248,8 @@ public sealed class CartService
         CreatedAt = now
       });
     }
+
+    return affectedCartIds;
   }
 
   public async Task<(bool Ok, string? Error)> DismissNoticeAsync(
@@ -264,6 +269,7 @@ public sealed class CartService
 
     notice.DismissedAt = now;
     await _db.SaveChangesAsync(ct);
+    await _cartRealtimePublisher.PublishCartAsync(cartId, now, ct);
     return (true, null);
   }
 
@@ -329,6 +335,8 @@ public sealed class CartService
     cart.UpdatedAt = now;
     await _db.SaveChangesAsync(ct);
 
+    await _cartRealtimePublisher.PublishCartAsync(cart.Id, now, ct);
+
     return (true, null);
   }
 
@@ -356,6 +364,8 @@ public sealed class CartService
     _db.CartLines.Remove(line);
     cart.UpdatedAt = now;
     await _db.SaveChangesAsync(ct);
+
+    await _cartRealtimePublisher.PublishCartAsync(cart.Id, now, ct);
 
     return (true, null);
   }

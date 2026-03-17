@@ -6,6 +6,7 @@ using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using Microsoft.Extensions.Options;
 using MineralKingdom.Infrastructure.Configuration;
+using MineralKingdom.Infrastructure.Store.Realtime;
 
 namespace MineralKingdom.Infrastructure.Store;
 
@@ -14,12 +15,14 @@ public sealed class CheckoutService
   private readonly MineralKingdomDbContext _db;
   private readonly CheckoutOptions _opts;
   private readonly CartService _cartService;
+  private readonly ICartRealtimePublisher _cartRealtimePublisher;
 
-  public CheckoutService(MineralKingdomDbContext db, IOptions<CheckoutOptions> opts, CartService cartService)
+  public CheckoutService(MineralKingdomDbContext db, IOptions<CheckoutOptions> opts, CartService cartService, ICartRealtimePublisher cartRealtimePublisher)
   {
     _db = db;
     _opts = opts.Value;
     _cartService = cartService;
+    _cartRealtimePublisher = cartRealtimePublisher;
   }
 
   public async Task<(bool Ok, string? Error, CheckoutHold? Hold)> GetActiveCheckoutAsync(
@@ -383,9 +386,11 @@ public sealed class CheckoutService
 
     var soldListingTitleById = soldListings.ToDictionary(x => x.Id, x => x.Title);
 
+    var affectedCartIds = new HashSet<Guid>();
+
     foreach (var item in soldHoldItems)
     {
-      await _cartService.RemoveSoldOfferFromOtherActiveCartsAsync(
+      var reconciledCartIds = await _cartService.RemoveSoldOfferFromOtherActiveCartsAsync(
         purchasedCartId: hold.CartId,
         offerId: item.OfferId,
         listingId: item.ListingId,
@@ -394,6 +399,11 @@ public sealed class CheckoutService
           : "Item",
         now: now,
         ct: ct);
+
+      foreach (var cartId in reconciledCartIds)
+      {
+        affectedCartIds.Add(cartId);
+      }
     }
 
     try
@@ -428,6 +438,14 @@ public sealed class CheckoutService
 
       await _db.SaveChangesAsync(ct);
       await tx.CommitAsync(ct);
+
+      await _cartRealtimePublisher.PublishCartAsync(hold.CartId, now, ct);
+
+      foreach (var cartId in affectedCartIds)
+      {
+        await _cartRealtimePublisher.PublishCartAsync(cartId, now, ct);
+      }
+
       return (true, null);
     }
     catch (DbUpdateException ex) when (ex.InnerException is PostgresException pg && pg.SqlState == "23505")

@@ -24,6 +24,7 @@ using DotNetEnv;
 using MineralKingdom.Api.Services;
 using MineralKingdom.Infrastructure.Auctions.Realtime;
 using MineralKingdom.Infrastructure.Orders;
+using MineralKingdom.Infrastructure.Store.Realtime;
 
 
 
@@ -153,6 +154,8 @@ public class Program
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Support.SupportTicketService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Cms.CmsPagesService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Analytics.AnalyticsSnapshotService>();
+        builder.Services.AddSingleton<CartRealtimeHub>();
+        builder.Services.AddScoped<ICartRealtimePublisher, CartRealtimePublisher>();
         // -------------------------
         // Authorization policy: unverified users cannot bid
         builder.Services.AddAuthorization(options =>

@@ -58,7 +58,10 @@ public sealed record ActiveCheckoutResponse(
   Guid? HoldId,
   DateTimeOffset? ExpiresAt,
   string? GuestEmail,
-  string? Status
+  string? Status,
+  bool CanExtend,
+  int ExtensionCount,
+  int MaxExtensions
 );
 
 public sealed record ResetCheckoutResponse(
@@ -69,4 +72,16 @@ public sealed record ResetCheckoutResponse(
 public sealed record CompleteCheckoutRequest(
   Guid HoldId,
   string PaymentReference
+);
+
+public sealed record ExtendCheckoutRequest(
+  Guid HoldId
+);
+
+public sealed record ExtendCheckoutResponse(
+  Guid HoldId,
+  DateTimeOffset ExpiresAt,
+  bool CanExtend,
+  int ExtensionCount,
+  int MaxExtensions
 );

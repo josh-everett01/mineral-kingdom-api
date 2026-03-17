@@ -177,6 +177,7 @@ public sealed class CheckoutService
         CreatedAt = now,
         UpdatedAt = now,
         ExpiresAt = now.AddMinutes(_opts.HoldInitialMinutes),
+        ExtensionCount = 0,
       };
 
       _db.CheckoutHolds.Add(hold);
@@ -232,15 +233,64 @@ public sealed class CheckoutService
       return (false, "HOLD_EXPIRED", null);
     }
 
-    var candidate = now.AddMinutes(_opts.HoldInitialMinutes);
+    return (true, null, hold);
+  }
+
+  public async Task<(bool Ok, string? Error, CheckoutHold? Hold)> ExtendHoldAsync(
+    Guid holdId,
+    Guid? userId,
+    DateTimeOffset now,
+    CancellationToken ct)
+  {
+    var hold = await _db.CheckoutHolds.SingleOrDefaultAsync(h => h.Id == holdId, ct);
+    if (hold is null) return (false, "HOLD_NOT_FOUND", null);
+
+    if (hold.UserId.HasValue && hold.UserId != userId)
+      return (false, "FORBIDDEN", null);
+
+    if (hold.Status != CheckoutHoldStatuses.Active)
+      return (false, "HOLD_NOT_ACTIVE", null);
+
+    if (now > hold.ExpiresAt)
+    {
+      hold.Status = CheckoutHoldStatuses.Expired;
+      hold.UpdatedAt = now;
+
+      await DeactivateHoldItemsAsync(hold.Id, ct);
+      await _db.SaveChangesAsync(ct);
+
+      return (false, "HOLD_EXPIRED", null);
+    }
+
+    if (hold.ExtensionCount >= _opts.HoldMaxExtensions)
+      return (false, "EXTENSION_LIMIT_REACHED", null);
+
+    var secondsRemaining = (hold.ExpiresAt - now).TotalSeconds;
+    if (secondsRemaining > _opts.HoldExtendThresholdSeconds)
+      return (false, "TOO_EARLY_TO_EXTEND", null);
+
+    var candidate = hold.ExpiresAt.AddMinutes(_opts.HoldInitialMinutes);
     var max = hold.CreatedAt.AddMinutes(_opts.HoldMaxMinutes);
 
     hold.ExpiresAt = candidate < max ? candidate : max;
+    hold.ExtensionCount += 1;
     hold.UpdatedAt = now;
 
     await _db.SaveChangesAsync(ct);
     return (true, null, hold);
   }
+
+  public bool CanExtend(CheckoutHold hold, DateTimeOffset now)
+  {
+    if (hold.Status != CheckoutHoldStatuses.Active) return false;
+    if (now > hold.ExpiresAt) return false;
+    if (hold.ExtensionCount >= _opts.HoldMaxExtensions) return false;
+
+    var secondsRemaining = (hold.ExpiresAt - now).TotalSeconds;
+    return secondsRemaining <= _opts.HoldExtendThresholdSeconds;
+  }
+
+  public int MaxExtensions => _opts.HoldMaxExtensions;
 
   public async Task<(bool Ok, string? Error)> CompletePaymentAsync(
     Guid holdId,

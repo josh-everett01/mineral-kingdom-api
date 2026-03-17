@@ -30,6 +30,7 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<OrderLine> OrderLines => Set<OrderLine>();
     public DbSet<Cart> Carts => Set<Cart>();
     public DbSet<CartLine> CartLines => Set<CartLine>();
+    public DbSet<CartNotice> CartNotices => Set<CartNotice>();
     public DbSet<CheckoutHold> CheckoutHolds => Set<CheckoutHold>();
     public DbSet<CheckoutPayment> CheckoutPayments => Set<CheckoutPayment>();
     public DbSet<OrderPayment> OrderPayments => Set<OrderPayment>();
@@ -759,5 +760,34 @@ public class MineralKingdomDbContext : DbContext
 
             b.HasIndex(x => x.Date);
         });
+
+        modelBuilder.Entity<Cart>(entity =>
+            {
+                entity.ToTable("carts");
+                entity.HasKey(x => x.Id);
+                entity.Property(x => x.Status).HasMaxLength(30).IsRequired();
+
+                entity.HasMany(x => x.Lines)
+                    .WithOne(x => x.Cart)
+                    .HasForeignKey(x => x.CartId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                entity.HasMany(x => x.Notices)
+                    .WithOne(x => x.Cart)
+                    .HasForeignKey(x => x.CartId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+        modelBuilder.Entity<CartNotice>(entity =>
+            {
+                entity.ToTable("cart_notices");
+                entity.HasKey(x => x.Id);
+
+                entity.Property(x => x.Type).HasMaxLength(64).IsRequired();
+                entity.Property(x => x.Message).HasMaxLength(500).IsRequired();
+
+                entity.HasIndex(x => new { x.CartId, x.CreatedAt });
+                entity.HasIndex(x => new { x.CartId, x.DismissedAt });
+            });
     }
 }

@@ -82,4 +82,31 @@ public sealed class CartController : ControllerBase
     Response.Headers["X-Cart-Id"] = refreshed.Id.ToString();
     return Ok(await _carts.ToDtoAsync(refreshed, ct));
   }
+
+  [HttpPost("notices/{noticeId:guid}/dismiss")]
+  [AllowAnonymous]
+  public async Task<ActionResult<DismissCartNoticeResponse>> DismissNotice(
+    Guid noticeId,
+    [FromHeader(Name = "X-Cart-Id")] Guid? cartIdHeader,
+    CancellationToken ct)
+  {
+    var now = DateTimeOffset.UtcNow;
+    var userId = User.Identity?.IsAuthenticated == true ? TryGetUserId() : null;
+
+    var cart = await _carts.GetOrCreateAsync(userId, cartIdHeader, now, ct);
+    var (ok, err) = await _carts.DismissNoticeAsync(cart.Id, noticeId, now, ct);
+
+    if (!ok)
+    {
+      return err switch
+      {
+        "NOTICE_NOT_FOUND" => NotFound(new { error = err }),
+        _ => BadRequest(new { error = err })
+      };
+    }
+
+    Response.Headers["X-Cart-Id"] = cart.Id.ToString();
+
+    return Ok(new DismissCartNoticeResponse(true, noticeId));
+  }
 }

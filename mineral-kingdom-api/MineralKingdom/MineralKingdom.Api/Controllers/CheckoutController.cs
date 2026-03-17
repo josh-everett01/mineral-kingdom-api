@@ -55,7 +55,10 @@ public sealed class CheckoutController : ControllerBase
       HoldId: hold?.Id,
       ExpiresAt: hold?.ExpiresAt,
       GuestEmail: hold?.GuestEmail,
-      Status: hold?.Status
+      Status: hold?.Status,
+      CanExtend: hold is not null && _checkout.CanExtend(hold, now),
+      ExtensionCount: hold?.ExtensionCount ?? 0,
+      MaxExtensions: _checkout.MaxExtensions
     ));
   }
 
@@ -168,6 +171,42 @@ public sealed class CheckoutController : ControllerBase
       };
     }
 
-    return Ok(new CheckoutHeartbeatResponse(hold!.Id, hold.ExpiresAt));
+    return Ok(new CheckoutHeartbeatResponse(
+      hold!.Id,
+      hold.ExpiresAt,
+      _checkout.CanExtend(hold, now),
+      hold.ExtensionCount,
+      _checkout.MaxExtensions
+    ));
+  }
+
+  [HttpPost("extend")]
+  [AllowAnonymous]
+  public async Task<ActionResult<ExtendCheckoutResponse>> Extend(
+    [FromBody] ExtendCheckoutRequest req,
+    CancellationToken ct)
+  {
+    var now = DateTimeOffset.UtcNow;
+    var userId = User.Identity?.IsAuthenticated == true ? TryGetUserId() : null;
+
+    var (ok, err, hold) = await _checkout.ExtendHoldAsync(req.HoldId, userId, now, ct);
+    if (!ok)
+    {
+      return err switch
+      {
+        "HOLD_NOT_FOUND" => NotFound(new { error = err }),
+        "HOLD_EXPIRED" => BadRequest(new { error = err }),
+        "FORBIDDEN" => Forbid(),
+        _ => BadRequest(new { error = err })
+      };
+    }
+
+    return Ok(new ExtendCheckoutResponse(
+      hold!.Id,
+      hold.ExpiresAt,
+      _checkout.CanExtend(hold, now),
+      hold.ExtensionCount,
+      _checkout.MaxExtensions
+    ));
   }
 }

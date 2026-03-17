@@ -13,11 +13,13 @@ public sealed class CheckoutService
 {
   private readonly MineralKingdomDbContext _db;
   private readonly CheckoutOptions _opts;
+  private readonly CartService _cartService;
 
-  public CheckoutService(MineralKingdomDbContext db, IOptions<CheckoutOptions> opts)
+  public CheckoutService(MineralKingdomDbContext db, IOptions<CheckoutOptions> opts, CartService cartService)
   {
     _db = db;
     _opts = opts.Value;
+    _cartService = cartService;
   }
 
   public async Task<(bool Ok, string? Error, CheckoutHold? Hold)> GetActiveCheckoutAsync(
@@ -366,6 +368,33 @@ public sealed class CheckoutService
     var cart = await _db.Carts.SingleAsync(c => c.Id == hold.CartId, ct);
     cart.Status = CartStatuses.CheckedOut;
     cart.UpdatedAt = now;
+
+    var soldHoldItems = await _db.CheckoutHoldItems
+  .Where(x => x.HoldId == hold.Id)
+  .Select(x => new { x.OfferId, x.ListingId })
+  .ToListAsync(ct);
+
+    var soldListingIds = soldHoldItems.Select(x => x.ListingId).Distinct().ToList();
+
+    var soldListings = await _db.Listings
+      .Where(x => soldListingIds.Contains(x.Id))
+      .Select(x => new { x.Id, x.Title })
+      .ToListAsync(ct);
+
+    var soldListingTitleById = soldListings.ToDictionary(x => x.Id, x => x.Title);
+
+    foreach (var item in soldHoldItems)
+    {
+      await _cartService.RemoveSoldOfferFromOtherActiveCartsAsync(
+        purchasedCartId: hold.CartId,
+        offerId: item.OfferId,
+        listingId: item.ListingId,
+        listingTitle: soldListingTitleById.TryGetValue(item.ListingId, out var title)
+          ? title ?? "Item"
+          : "Item",
+        now: now,
+        ct: ct);
+    }
 
     try
     {

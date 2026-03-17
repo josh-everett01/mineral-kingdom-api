@@ -14,6 +14,21 @@ public static class CheckoutHoldStatuses
   public const string Completed = "COMPLETED";
 }
 
+public static class CartNoticeTypes
+{
+  public const string ItemRemovedSold = "ITEM_REMOVED_SOLD";
+}
+
+public sealed record CartNoticeDto(
+  Guid Id,
+  string Type,
+  string Message,
+  Guid? OfferId,
+  Guid? ListingId,
+  DateTimeOffset CreatedAt,
+  DateTimeOffset? DismissedAt
+);
+
 public sealed record CartLineDto(
   Guid OfferId,
   Guid ListingId,
@@ -33,12 +48,18 @@ public sealed record CartDto(
   string Status,
   int SubtotalCents,
   IReadOnlyList<string> Warnings,
+  IReadOnlyList<CartNoticeDto> Notices,
   IReadOnlyList<CartLineDto> Lines
 );
 
 public sealed record UpsertCartLineRequest(
   Guid OfferId,
   int Quantity
+);
+
+public sealed record DismissCartNoticeResponse(
+  bool Dismissed,
+  Guid NoticeId
 );
 
 public sealed record StartCheckoutRequest(

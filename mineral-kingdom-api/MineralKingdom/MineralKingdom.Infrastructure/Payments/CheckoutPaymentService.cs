@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Configuration;
+using MineralKingdom.Infrastructure.Payments.Realtime;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 
@@ -12,15 +13,18 @@ public sealed class CheckoutPaymentService
   private readonly MineralKingdomDbContext _db;
   private readonly IReadOnlyList<ICheckoutPaymentProvider> _providers;
   private readonly PaymentsOptions _opts;
+  private readonly ICheckoutPaymentRealtimePublisher _checkoutPaymentRealtimePublisher;
 
   public CheckoutPaymentService(
     MineralKingdomDbContext db,
     IEnumerable<ICheckoutPaymentProvider> providers,
-    IOptions<PaymentsOptions> opts)
+    IOptions<PaymentsOptions> opts,
+    ICheckoutPaymentRealtimePublisher checkoutPaymentRealtimePublisher)
   {
     _db = db;
     _providers = providers.ToList();
     _opts = opts.Value;
+    _checkoutPaymentRealtimePublisher = checkoutPaymentRealtimePublisher;
   }
 
   public async Task<(bool Ok, string? Error, CheckoutPayment? Payment, string? RedirectUrl)> StartAsync(
@@ -90,7 +94,9 @@ public sealed class CheckoutPaymentService
     };
 
     _db.CheckoutPayments.Add(payment);
+
     await _db.SaveChangesAsync(ct);
+    await _checkoutPaymentRealtimePublisher.PublishPaymentAsync(payment.Id, now, ct);
 
     var impl = ResolveProvider(provider);
     if (impl is null)
@@ -125,6 +131,8 @@ public sealed class CheckoutPaymentService
     payment.UpdatedAt = now;
 
     await _db.SaveChangesAsync(ct);
+
+    await _checkoutPaymentRealtimePublisher.PublishPaymentAsync(payment.Id, now, ct);
 
     return (true, null, payment, redirect.RedirectUrl);
   }

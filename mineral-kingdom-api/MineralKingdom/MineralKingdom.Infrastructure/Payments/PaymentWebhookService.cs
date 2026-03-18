@@ -17,13 +17,12 @@ public sealed class PaymentWebhookService
   private readonly MineralKingdomDbContext _db;
   private readonly CheckoutService _checkout;
   private readonly IAuctionRealtimePublisher _realtime;
-
   private readonly EmailOutboxService _emails;
-
   private readonly IOrderRealtimePublisher _ordersRealtime;
   private readonly IShippingInvoiceRealtimePublisher _shippingInvoicesRealtime;
+  private readonly ICheckoutPaymentRealtimePublisher _checkoutPaymentsRealtime;
 
-  public PaymentWebhookService(MineralKingdomDbContext db, CheckoutService checkout, IAuctionRealtimePublisher realtime, EmailOutboxService emails, IOrderRealtimePublisher ordersRealtime, IShippingInvoiceRealtimePublisher shippingInvoicesRealtime)
+  public PaymentWebhookService(MineralKingdomDbContext db, CheckoutService checkout, IAuctionRealtimePublisher realtime, EmailOutboxService emails, IOrderRealtimePublisher ordersRealtime, IShippingInvoiceRealtimePublisher shippingInvoicesRealtime, ICheckoutPaymentRealtimePublisher checkoutPaymentsRealtime)
   {
     _db = db;
     _checkout = checkout;
@@ -31,6 +30,7 @@ public sealed class PaymentWebhookService
     _emails = emails;
     _ordersRealtime = ordersRealtime;
     _shippingInvoicesRealtime = shippingInvoicesRealtime;
+    _checkoutPaymentsRealtime = checkoutPaymentsRealtime;
   }
 
   // ----------------------------
@@ -49,6 +49,19 @@ public sealed class PaymentWebhookService
     {
       evt.ProcessedAt = now;
       await _db.SaveChangesAsync(ct);
+
+      if (evt.CheckoutPaymentId.HasValue)
+      {
+        try
+        {
+          await _checkoutPaymentsRealtime.PublishPaymentAsync(evt.CheckoutPaymentId.Value, now, ct);
+        }
+        catch
+        {
+          // best-effort
+        }
+      }
+
       return;
     }
 
@@ -121,6 +134,19 @@ public sealed class PaymentWebhookService
 
       evt.ProcessedAt = now;
       await _db.SaveChangesAsync(ct);
+
+      if (evt.CheckoutPaymentId.HasValue)
+      {
+        try
+        {
+          await _checkoutPaymentsRealtime.PublishPaymentAsync(evt.CheckoutPaymentId.Value, now, ct);
+        }
+        catch
+        {
+          // best-effort
+        }
+      }
+
       return;
     }
 
@@ -210,6 +236,17 @@ public sealed class PaymentWebhookService
     {
       evt.ProcessedAt = now;
       await _db.SaveChangesAsync(ct);
+      if (evt.CheckoutPaymentId.HasValue)
+      {
+        try
+        {
+          await _checkoutPaymentsRealtime.PublishPaymentAsync(evt.CheckoutPaymentId.Value, now, ct);
+        }
+        catch
+        {
+          // best-effort
+        }
+      }
       return;
     }
 
@@ -356,6 +393,15 @@ public sealed class PaymentWebhookService
 
     evt.ProcessedAt = now;
     await _db.SaveChangesAsync(ct);
+
+    try
+    {
+      await _checkoutPaymentsRealtime.PublishPaymentAsync(pay.Id, now, ct);
+    }
+    catch
+    {
+      // best-effort
+    }
   }
 
   // ----------------------------

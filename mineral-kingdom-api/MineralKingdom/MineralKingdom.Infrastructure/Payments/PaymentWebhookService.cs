@@ -101,36 +101,40 @@ public sealed class PaymentWebhookService
     // 1) STORE checkout hold flow (existing)
     if (holdId is not null)
     {
+      CheckoutPayment? pay = null;
+
       if (checkoutPaymentId.HasValue)
       {
-        var pay = await _db.CheckoutPayments.SingleOrDefaultAsync(x => x.Id == checkoutPaymentId.Value, ct);
-        if (pay is not null)
-        {
-          pay.ProviderCheckoutId ??= sessionId;
-          pay.ProviderPaymentId = paymentIntent;
-          pay.Status = CheckoutPaymentStatuses.Succeeded;
-          pay.UpdatedAt = now;
-          evt.CheckoutPaymentId = pay.Id;
-        }
+        pay = await _db.CheckoutPayments.SingleOrDefaultAsync(x => x.Id == checkoutPaymentId.Value, ct);
       }
       else if (!string.IsNullOrWhiteSpace(sessionId))
       {
-        var pay = await _db.CheckoutPayments
-          .SingleOrDefaultAsync(x => x.Provider == PaymentProviders.Stripe && x.ProviderCheckoutId == sessionId, ct);
-        if (pay is not null)
-        {
-          pay.ProviderPaymentId = paymentIntent;
-          pay.Status = CheckoutPaymentStatuses.Succeeded;
-          pay.UpdatedAt = now;
-          evt.CheckoutPaymentId = pay.Id;
-        }
+        pay = await _db.CheckoutPayments
+          .SingleOrDefaultAsync(
+            x => x.Provider == PaymentProviders.Stripe && x.ProviderCheckoutId == sessionId,
+            ct);
       }
 
-      _ = await _checkout.ConfirmPaidFromWebhookAsync(
+      if (pay is not null)
+      {
+        pay.ProviderCheckoutId ??= sessionId;
+        pay.ProviderPaymentId = paymentIntent;
+        pay.Status = CheckoutPaymentStatuses.Succeeded;
+        pay.UpdatedAt = now;
+        evt.CheckoutPaymentId = pay.Id;
+      }
+
+      var (confirmedOk, confirmError) = await _checkout.ConfirmPaidFromWebhookAsync(
         holdId.Value,
         paymentIntent ?? sessionId ?? eventId,
         now,
         ct);
+
+      if (!confirmedOk)
+      {
+        throw new InvalidOperationException(
+          $"CHECKOUT_CONFIRMATION_FAILED:{confirmError ?? "UNKNOWN"}:holdId={holdId.Value}");
+      }
 
       evt.ProcessedAt = now;
       await _db.SaveChangesAsync(ct);

@@ -44,6 +44,10 @@ public sealed class TestingE2ESeedController : ControllerBase
     var storeMedia2Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa5");
     var storeOffer2Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa6");
 
+    var storeListing3Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa7");
+    var storeMedia3Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa8");
+    var storeOffer3Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa9");
+
     var auctionListingId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1");
     var auctionMediaId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2");
     var auctionId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3");
@@ -211,6 +215,80 @@ public sealed class TestingE2ESeedController : ControllerBase
     await UpsertListingAsync(
       new Listing
       {
+        Id = storeListing3Id,
+        Title = "Celestite Geode",
+        Description = "Deterministic E2E store listing fixture C.",
+        Status = ListingStatuses.Published,
+        PrimaryMineralId = quartzMineralId,
+        LocalityDisplay = "Sakoany, Madagascar",
+        CountryCode = "MG",
+        AdminArea1 = "Boeny",
+        MineName = "Sakoany District",
+        LengthCm = 9.4m,
+        WidthCm = 6.1m,
+        HeightCm = 5.0m,
+        WeightGrams = 610,
+        SizeClass = "CABINET",
+        IsFluorescent = false,
+        FluorescenceNotes = null,
+        ConditionNotes = "Sky-blue crystals with natural rim.",
+        IsLot = false,
+        QuantityTotal = 1,
+        QuantityAvailable = 1,
+        CreatedAt = now.AddDays(-2),
+        UpdatedAt = now.AddDays(-2),
+        PublishedAt = now.AddDays(-2),
+        ArchivedAt = null
+      },
+      ct);
+
+    await UpsertListingMediaAsync(
+      new ListingMedia
+      {
+        Id = storeMedia3Id,
+        ListingId = storeListing3Id,
+        MediaType = ListingMediaTypes.Image,
+        Status = ListingMediaStatuses.Ready,
+        StorageKey = null,
+        OriginalFileName = "celestite-geode.jpg",
+        ContentType = "image/jpeg",
+        ContentLengthBytes = 201000,
+        Url = "https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=80",
+        SortOrder = 0,
+        IsPrimary = true,
+        Caption = "Celestite Geode primary image",
+        CreatedAt = now.AddDays(-2),
+        UpdatedAt = now.AddDays(-2),
+        DeletedAt = null
+      },
+      ct);
+
+    await UpsertStoreOfferAsync(
+      new StoreOffer
+      {
+        Id = storeOffer3Id,
+        ListingId = storeListing3Id,
+        PriceCents = 21900,
+        DiscountType = DiscountTypes.None,
+        DiscountCents = null,
+        DiscountPercentBps = null,
+        IsActive = true,
+        StartsAt = now.AddDays(-1),
+        EndsAt = now.AddDays(30),
+        CreatedAt = now.AddDays(-1),
+        UpdatedAt = now.AddDays(-1),
+        DeletedAt = null
+      },
+      ct);
+
+    await ResetCheckoutStateAsync(
+      storeListing3Id,
+      now,
+      ct);
+
+    await UpsertListingAsync(
+      new Listing
+      {
         Id = auctionListingId,
         Title = "Arkansas Quartz Cluster",
         Description = "Deterministic E2E auction listing fixture.",
@@ -292,6 +370,8 @@ public sealed class TestingE2ESeedController : ControllerBase
       StoreOfferId: storeOfferId,
       StoreListing2Id: storeListing2Id,
       StoreOffer2Id: storeOffer2Id,
+      StoreListing3Id: storeListing3Id,
+      StoreOffer3Id: storeOffer3Id,
       AuctionListingId: auctionListingId,
       AuctionId: auctionId));
   }
@@ -509,6 +589,8 @@ public sealed class TestingE2ESeedController : ControllerBase
     Guid StoreOfferId,
     Guid StoreListing2Id,
     Guid StoreOffer2Id,
+    Guid StoreListing3Id,
+    Guid StoreOffer3Id,
     Guid AuctionListingId,
     Guid AuctionId);
 }

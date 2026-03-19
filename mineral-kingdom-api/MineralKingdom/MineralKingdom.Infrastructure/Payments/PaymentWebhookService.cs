@@ -70,9 +70,6 @@ public sealed class PaymentWebhookService
     var sessionId = obj.TryGetProperty("id", out var sid) ? sid.GetString() : null;
     var paymentIntent = obj.TryGetProperty("payment_intent", out var pi) ? pi.GetString() : null;
 
-    // Stripe session metadata can be either:
-    // - checkout holds: hold_id + payment_id
-    // - order payments: order_id + order_payment_id
     Guid? holdId = null;
     Guid? checkoutPaymentId = null;
 
@@ -98,7 +95,7 @@ public sealed class PaymentWebhookService
         shippingInvoiceId = sid2;
     }
 
-    // 1) STORE checkout hold flow (existing)
+    // 1) STORE checkout hold flow
     if (holdId is not null)
     {
       CheckoutPayment? pay = null;
@@ -124,6 +121,9 @@ public sealed class PaymentWebhookService
         evt.CheckoutPaymentId = pay.Id;
       }
 
+      Console.WriteLine(
+        $"[Stripe webhook] store checkout flow eventId={eventId} holdId={holdId.Value} paymentId={checkoutPaymentId} sessionId={sessionId} paymentIntent={paymentIntent}");
+
       var (confirmedOk, confirmError) = await _checkout.ConfirmPaidFromWebhookAsync(
         holdId.Value,
         paymentIntent ?? sessionId ?? eventId,
@@ -132,9 +132,15 @@ public sealed class PaymentWebhookService
 
       if (!confirmedOk)
       {
+        Console.WriteLine(
+          $"[Stripe webhook] checkout confirmation failed holdId={holdId.Value} error={confirmError ?? "UNKNOWN"}");
+
         throw new InvalidOperationException(
           $"CHECKOUT_CONFIRMATION_FAILED:{confirmError ?? "UNKNOWN"}:holdId={holdId.Value}");
       }
+
+      Console.WriteLine(
+        $"[Stripe webhook] checkout confirmation succeeded holdId={holdId.Value}");
 
       evt.ProcessedAt = now;
       await _db.SaveChangesAsync(ct);
@@ -174,7 +180,7 @@ public sealed class PaymentWebhookService
 
       op.ProviderCheckoutId ??= sessionId;
       op.ProviderPaymentId = paymentIntent ?? op.ProviderPaymentId;
-      op.Status = CheckoutPaymentStatuses.Succeeded; // same status strings
+      op.Status = CheckoutPaymentStatuses.Succeeded;
       op.UpdatedAt = now;
       evt.OrderPaymentId = op.Id;
 
@@ -205,19 +211,16 @@ public sealed class PaymentWebhookService
 
       inv.ProviderCheckoutId ??= sessionId;
       inv.ProviderPaymentId = paymentIntent ?? inv.ProviderPaymentId;
-
-      // Treat completion as paid
       inv.Status = "PAID";
       inv.PaidAt ??= now;
       inv.UpdatedAt = now;
 
       evt.ProcessedAt = now;
       await _db.SaveChangesAsync(ct);
-      try { await _shippingInvoicesRealtime.PublishInvoiceAsync(inv.Id, now, ct); } catch { /* best-effort */ }
+      try { await _shippingInvoicesRealtime.PublishInvoiceAsync(inv.Id, now, ct); } catch { }
       return;
     }
 
-    // If neither flow matched, just mark processed.
     evt.ProcessedAt = now;
     await _db.SaveChangesAsync(ct);
   }

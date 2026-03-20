@@ -18,18 +18,40 @@ public sealed class CartService
   }
 
   public async Task<Cart> GetOrCreateAsync(
-    Guid? userId,
-    Guid? cartId,
-    DateTimeOffset now,
-    CancellationToken ct)
+  Guid? userId,
+  Guid? cartId,
+  DateTimeOffset now,
+  CancellationToken ct)
   {
     Cart? cart = null;
 
     if (cartId.HasValue)
     {
-      cart = await _db.Carts
+      var cartById = await _db.Carts
         .Include(c => c.Lines)
         .SingleOrDefaultAsync(c => c.Id == cartId.Value, ct);
+
+      if (cartById is not null)
+      {
+        // Guest cart cookies should only bind to ACTIVE carts.
+        // If the referenced cart has already been checked out (or otherwise
+        // left ACTIVE state), treat it as unusable and fall through to create
+        // a fresh active cart.
+        if (cartById.Status == CartStatuses.Active)
+        {
+          cart = cartById;
+        }
+        else if (userId.HasValue && cartById.UserId == userId)
+        {
+          // For authenticated users, ignore the stale/non-active cart id and
+          // fall through to resolve their latest ACTIVE cart below.
+          cart = null;
+        }
+        else
+        {
+          cart = null;
+        }
+      }
     }
 
     if (cart is null && userId.HasValue)

@@ -54,7 +54,6 @@ public sealed class CheckoutPaymentService
     if (cart.Lines.Count == 0)
       return (false, "CART_EMPTY", null, null);
 
-    // Load offers for pricing snapshot
     var offerIds = cart.Lines.Select(l => l.OfferId).ToList();
     var offers = await _db.StoreOffers
       .Where(o => offerIds.Contains(o.Id))
@@ -122,7 +121,6 @@ public sealed class CheckoutPaymentService
       ex.Message.StartsWith("PAYPAL_NOT_CONFIGURED", StringComparison.OrdinalIgnoreCase) ||
       ex.Message.StartsWith("PAYPAL_", StringComparison.OrdinalIgnoreCase))
     {
-      // keep the payment row (Created), but don’t blow up the request
       return (false, "PROVIDER_NOT_CONFIGURED", payment, null);
     }
 
@@ -131,10 +129,68 @@ public sealed class CheckoutPaymentService
     payment.UpdatedAt = now;
 
     await _db.SaveChangesAsync(ct);
-
     await _checkoutPaymentRealtimePublisher.PublishPaymentAsync(payment.Id, now, ct);
 
     return (true, null, payment, redirect.RedirectUrl);
+  }
+
+  public async Task<(bool Ok, string? Error, CheckoutPayment? Payment)> CaptureAsync(
+    Guid paymentId,
+    DateTimeOffset now,
+    CancellationToken ct)
+  {
+    var payment = await _db.CheckoutPayments.SingleOrDefaultAsync(p => p.Id == paymentId, ct);
+    if (payment is null)
+      return (false, "PAYMENT_NOT_FOUND", null);
+
+    if (!string.Equals(payment.Provider, PaymentProviders.PayPal, StringComparison.OrdinalIgnoreCase))
+      return (false, "PROVIDER_CAPTURE_NOT_SUPPORTED", payment);
+
+    if (string.Equals(payment.Status, CheckoutPaymentStatuses.Succeeded, StringComparison.OrdinalIgnoreCase))
+      return (true, null, payment);
+
+    if (string.IsNullOrWhiteSpace(payment.ProviderCheckoutId))
+      return (false, "PROVIDER_CHECKOUT_ID_MISSING", payment);
+
+    if (string.Equals(_opts.Mode, "FAKE", StringComparison.OrdinalIgnoreCase))
+    {
+      payment.ProviderPaymentId ??= $"CAPTURE-FAKE-{payment.Id:N}";
+      payment.UpdatedAt = now;
+
+      await _db.SaveChangesAsync(ct);
+      await _checkoutPaymentRealtimePublisher.PublishPaymentAsync(payment.Id, now, ct);
+
+      return (true, null, payment);
+    }
+
+    var paypalProvider = _providers.OfType<PayPalCheckoutPaymentProvider>().SingleOrDefault();
+    if (paypalProvider is null)
+      return (false, "PROVIDER_CAPTURE_NOT_SUPPORTED", payment);
+
+    try
+    {
+      var capture = await paypalProvider.CaptureOrderAsync(payment.ProviderCheckoutId, ct);
+
+      if (!string.IsNullOrWhiteSpace(capture.CaptureId) &&
+          string.IsNullOrWhiteSpace(payment.ProviderPaymentId))
+      {
+        payment.ProviderPaymentId = capture.CaptureId;
+      }
+
+      payment.UpdatedAt = now;
+
+      await _db.SaveChangesAsync(ct);
+      await _checkoutPaymentRealtimePublisher.PublishPaymentAsync(payment.Id, now, ct);
+
+      return (true, null, payment);
+    }
+    catch (InvalidOperationException ex) when (
+      ex.Message.StartsWith("PAYPAL_NOT_CONFIGURED", StringComparison.OrdinalIgnoreCase) ||
+      ex.Message.StartsWith("PAYPAL_CAPTURE_ORDER_FAILED", StringComparison.OrdinalIgnoreCase) ||
+      ex.Message.StartsWith("PAYPAL_", StringComparison.OrdinalIgnoreCase))
+    {
+      return (false, "PAYPAL_CAPTURE_FAILED", payment);
+    }
   }
 
   public async Task<CheckoutPayment?> GetAsync(Guid id, CancellationToken ct)

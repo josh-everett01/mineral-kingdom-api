@@ -1,11 +1,10 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
-using Microsoft.Extensions.Http;
 using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Configuration;
-
 
 namespace MineralKingdom.Infrastructure.Payments;
 
@@ -47,7 +46,6 @@ public sealed class PayPalCheckoutPaymentProvider : ICheckoutPaymentProvider
 
     var accessToken = await GetAccessTokenAsync(baseUrl, ct);
 
-    // PayPal expects decimal string amounts; our system uses cents.
     var value = (request.AmountCents / 100.0m).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
 
     var createOrderBody = new
@@ -58,7 +56,7 @@ public sealed class PayPalCheckoutPaymentProvider : ICheckoutPaymentProvider
         new
         {
           amount = new { currency_code = request.CurrencyCode, value },
-          // Helpful correlation for ops/debugging; webhook correlation is done via stored order_id and capture id.
+          // checkout-hold/store-payment correlation
           custom_id = request.PaymentId.ToString(),
           invoice_id = request.HoldId.ToString()
         }
@@ -112,6 +110,62 @@ public sealed class PayPalCheckoutPaymentProvider : ICheckoutPaymentProvider
     return new CreatePaymentRedirectResult(orderId, approveUrl!);
   }
 
+  public async Task<CapturePaymentResult> CaptureOrderAsync(string providerCheckoutId, CancellationToken ct)
+  {
+    if (string.Equals(_payments.Mode, "FAKE", StringComparison.OrdinalIgnoreCase))
+    {
+      return new CapturePaymentResult(
+        ProviderCheckoutId: providerCheckoutId,
+        CaptureId: $"CAPTURE-FAKE-{providerCheckoutId}",
+        Status: "COMPLETED");
+    }
+
+    if (string.IsNullOrWhiteSpace(_pp.ClientId) || string.IsNullOrWhiteSpace(_pp.Secret))
+      throw new InvalidOperationException("PAYPAL_NOT_CONFIGURED");
+
+    var baseUrl = IsLive(_pp.Environment)
+      ? "https://api-m.paypal.com"
+      : "https://api-m.sandbox.paypal.com";
+
+    var accessToken = await GetAccessTokenAsync(baseUrl, ct);
+
+    var client = _http.CreateClient("paypal");
+    client.BaseAddress = new Uri(baseUrl);
+
+    using var msg = new HttpRequestMessage(HttpMethod.Post, $"/v2/checkout/orders/{providerCheckoutId}/capture");
+    msg.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+    msg.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+
+    using var res = await client.SendAsync(msg, ct);
+    var resBody = await res.Content.ReadAsStringAsync(ct);
+
+    if (res.StatusCode == HttpStatusCode.UnprocessableEntity &&
+        resBody.Contains("ORDER_ALREADY_CAPTURED", StringComparison.OrdinalIgnoreCase))
+    {
+      return new CapturePaymentResult(
+        ProviderCheckoutId: providerCheckoutId,
+        CaptureId: null,
+        Status: "ALREADY_CAPTURED");
+    }
+
+    if (!res.IsSuccessStatusCode)
+      throw new InvalidOperationException($"PAYPAL_CAPTURE_ORDER_FAILED:{(int)res.StatusCode}:{resBody}");
+
+    using var doc = JsonDocument.Parse(resBody);
+    var root = doc.RootElement;
+
+    var status = root.TryGetProperty("status", out var statusProp) ? statusProp.GetString() : null;
+    var captureId = ExtractCaptureId(root);
+
+    if (string.IsNullOrWhiteSpace(status))
+      throw new InvalidOperationException("PAYPAL_CAPTURE_ORDER_MISSING_STATUS");
+
+    return new CapturePaymentResult(
+      ProviderCheckoutId: providerCheckoutId,
+      CaptureId: captureId,
+      Status: status!);
+  }
+
   private async Task<string> GetAccessTokenAsync(string baseUrl, CancellationToken ct)
   {
     var client = _http.CreateClient("paypal");
@@ -138,6 +192,35 @@ public sealed class PayPalCheckoutPaymentProvider : ICheckoutPaymentProvider
     return token!;
   }
 
+  private static string? ExtractCaptureId(JsonElement root)
+  {
+    if (!root.TryGetProperty("purchase_units", out var purchaseUnits) || purchaseUnits.ValueKind != JsonValueKind.Array)
+      return null;
+
+    foreach (var pu in purchaseUnits.EnumerateArray())
+    {
+      if (!pu.TryGetProperty("payments", out var payments) || payments.ValueKind != JsonValueKind.Object)
+        continue;
+
+      if (!payments.TryGetProperty("captures", out var captures) || captures.ValueKind != JsonValueKind.Array)
+        continue;
+
+      foreach (var capture in captures.EnumerateArray())
+      {
+        if (capture.TryGetProperty("id", out var id))
+          return id.GetString();
+      }
+    }
+
+    return null;
+  }
+
   private static bool IsLive(string? env)
     => string.Equals(env?.Trim(), "Live", StringComparison.OrdinalIgnoreCase);
 }
+
+public sealed record CapturePaymentResult(
+  string ProviderCheckoutId,
+  string? CaptureId,
+  string Status
+);

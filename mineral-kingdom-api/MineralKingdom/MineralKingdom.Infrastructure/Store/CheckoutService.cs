@@ -329,89 +329,116 @@ public sealed class CheckoutService
   }
 
   public async Task<(bool Ok, string? Error)> ConfirmPaidFromWebhookAsync(
-    Guid holdId,
-    string paymentReference,
-    DateTimeOffset now,
-    CancellationToken ct)
+  Guid holdId,
+  string paymentReference,
+  DateTimeOffset now,
+  CancellationToken ct)
   {
     await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
     var hold = await _db.CheckoutHolds.SingleOrDefaultAsync(h => h.Id == holdId, ct);
-    if (hold is null) return (false, "HOLD_NOT_FOUND");
+    if (hold is null)
+      return (false, "HOLD_NOT_FOUND");
 
-    if (hold.Status == CheckoutHoldStatuses.Completed)
+    // True idempotency anchor:
+    // if the order already exists for this hold, the business outcome is complete.
+    var existingOrder = await _db.Orders.AsNoTracking()
+      .SingleOrDefaultAsync(o => o.CheckoutHoldId == hold.Id, ct);
+
+    if (existingOrder is not null)
+      return (true, null);
+
+    // Only Active and Completed are recoverable here.
+    // Completed + no order can happen after a partial prior success and must be allowed to continue.
+    if (hold.Status != CheckoutHoldStatuses.Active &&
+        hold.Status != CheckoutHoldStatuses.Completed)
     {
-      var existingOrder = await _db.Orders.AsNoTracking()
-        .SingleOrDefaultAsync(o => o.CheckoutHoldId == hold.Id, ct);
-
-      if (existingOrder is not null)
-        return (true, null);
-    }
-
-    if (hold.Status != CheckoutHoldStatuses.Active)
       return (false, "HOLD_NOT_ACTIVE");
-
-    if (now > hold.ExpiresAt)
-    {
-      hold.Status = CheckoutHoldStatuses.Expired;
-      hold.UpdatedAt = now;
-      await _db.SaveChangesAsync(ct);
-      await tx.CommitAsync(ct);
-      return (false, "HOLD_EXPIRED");
     }
-
-    hold.CompletedAt = now;
-    hold.PaymentReference = paymentReference;
-    hold.Status = CheckoutHoldStatuses.Completed;
-    hold.UpdatedAt = now;
-
-    await MarkHoldItemsAsSoldAsync(hold.Id, now, ct);
-    await DeactivateHoldItemsAsync(hold.Id, ct);
-
-    var cart = await _db.Carts.SingleAsync(c => c.Id == hold.CartId, ct);
-    cart.Status = CartStatuses.CheckedOut;
-    cart.UpdatedAt = now;
-
-    var soldHoldItems = await _db.CheckoutHoldItems
-  .Where(x => x.HoldId == hold.Id)
-  .Select(x => new { x.OfferId, x.ListingId })
-  .ToListAsync(ct);
-
-    var soldListingIds = soldHoldItems.Select(x => x.ListingId).Distinct().ToList();
-
-    var soldListings = await _db.Listings
-      .Where(x => soldListingIds.Contains(x.Id))
-      .Select(x => new { x.Id, x.Title })
-      .ToListAsync(ct);
-
-    var soldListingTitleById = soldListings.ToDictionary(x => x.Id, x => x.Title);
 
     var affectedCartIds = new HashSet<Guid>();
 
-    foreach (var item in soldHoldItems)
+    // Only execute the one-time hold completion flow if the hold is still Active.
+    if (hold.Status == CheckoutHoldStatuses.Active)
     {
-      var reconciledCartIds = await _cartService.RemoveSoldOfferFromOtherActiveCartsAsync(
-        purchasedCartId: hold.CartId,
-        offerId: item.OfferId,
-        listingId: item.ListingId,
-        listingTitle: soldListingTitleById.TryGetValue(item.ListingId, out var title)
-          ? title ?? "Item"
-          : "Item",
-        now: now,
-        ct: ct);
-
-      foreach (var cartId in reconciledCartIds)
+      if (now > hold.ExpiresAt)
       {
-        affectedCartIds.Add(cartId);
+        hold.Status = CheckoutHoldStatuses.Expired;
+        hold.UpdatedAt = now;
+        await _db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return (false, "HOLD_EXPIRED");
+      }
+
+      hold.CompletedAt ??= now;
+
+      if (string.IsNullOrWhiteSpace(hold.PaymentReference))
+        hold.PaymentReference = paymentReference;
+
+      hold.Status = CheckoutHoldStatuses.Completed;
+      hold.UpdatedAt = now;
+
+      await MarkHoldItemsAsSoldAsync(hold.Id, now, ct);
+      await DeactivateHoldItemsAsync(hold.Id, ct);
+
+      var cart = await _db.Carts.SingleAsync(c => c.Id == hold.CartId, ct);
+      cart.Status = CartStatuses.CheckedOut;
+      cart.UpdatedAt = now;
+
+      var soldHoldItems = await _db.CheckoutHoldItems
+        .Where(x => x.HoldId == hold.Id)
+        .Select(x => new { x.OfferId, x.ListingId })
+        .ToListAsync(ct);
+
+      var soldListingIds = soldHoldItems
+        .Select(x => x.ListingId)
+        .Distinct()
+        .ToList();
+
+      var soldListings = await _db.Listings
+        .Where(x => soldListingIds.Contains(x.Id))
+        .Select(x => new { x.Id, x.Title })
+        .ToListAsync(ct);
+
+      var soldListingTitleById = soldListings.ToDictionary(x => x.Id, x => x.Title);
+
+      foreach (var item in soldHoldItems)
+      {
+        var reconciledCartIds = await _cartService.RemoveSoldOfferFromOtherActiveCartsAsync(
+          purchasedCartId: hold.CartId,
+          offerId: item.OfferId,
+          listingId: item.ListingId,
+          listingTitle: soldListingTitleById.TryGetValue(item.ListingId, out var title)
+            ? title ?? "Item"
+            : "Item",
+          now: now,
+          ct: ct);
+
+        foreach (var cartId in reconciledCartIds)
+        {
+          affectedCartIds.Add(cartId);
+        }
+      }
+    }
+    else
+    {
+      // Recoverable replay path:
+      // hold is already Completed but no order exists yet.
+      // Preserve original completion state, but fill missing reference if absent.
+      if (string.IsNullOrWhiteSpace(hold.PaymentReference))
+      {
+        hold.PaymentReference = paymentReference;
+        hold.UpdatedAt = now;
       }
     }
 
     try
     {
-      var existing = await _db.Orders.AsNoTracking()
+      // Re-check inside the transaction before creating the order in case another worker/thread got there first.
+      existingOrder = await _db.Orders
         .SingleOrDefaultAsync(o => o.CheckoutHoldId == hold.Id, ct);
 
-      if (existing is null)
+      if (existingOrder is null)
       {
         var order = await BuildPaidOrderFromHoldAsync(hold, now, ct);
 

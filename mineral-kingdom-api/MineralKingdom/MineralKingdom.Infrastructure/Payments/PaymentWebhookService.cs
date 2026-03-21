@@ -243,6 +243,7 @@ public sealed class PaymentWebhookService
     {
       evt.ProcessedAt = now;
       await _db.SaveChangesAsync(ct);
+
       if (evt.CheckoutPaymentId.HasValue)
       {
         try
@@ -254,6 +255,7 @@ public sealed class PaymentWebhookService
           // best-effort
         }
       }
+
       return;
     }
 
@@ -270,31 +272,37 @@ public sealed class PaymentWebhookService
     var paypalOrderId = TryGetPayPalOrderId(res);
 
     // For your Orders v2 create request, you set:
-    // - custom_id = OrderPaymentId
-    // - invoice_id = OrderId
-    Guid? orderPaymentId = null;
-    Guid? orderId = null;
+    // - custom_id = OrderPaymentId (auction) OR ShippingInvoiceId depending on flow
+    // - invoice_id = OrderId / FulfillmentGroupId / HoldId depending on flow
+    Guid? customGuid = null;
+    Guid? invoiceGuid = null;
 
-    if (res.TryGetProperty("custom_id", out var cust) && Guid.TryParse(cust.GetString(), out var opid))
-      orderPaymentId = opid;
+    if (res.TryGetProperty("custom_id", out var cust) && Guid.TryParse(cust.GetString(), out var parsedCustom))
+      customGuid = parsedCustom;
 
-    if (res.TryGetProperty("invoice_id", out var inv) && Guid.TryParse(inv.GetString(), out var oid))
-      orderId = oid;
+    if (res.TryGetProperty("invoice_id", out var inv) && Guid.TryParse(inv.GetString(), out var parsedInvoice))
+      invoiceGuid = parsedInvoice;
 
-    // ---- ORDER PAYMENTS (AUCTION) ----
+    // ---------------------------------------------------------------------------
+    // 1) ORDER PAYMENTS (AUCTION)
+    // ---------------------------------------------------------------------------
     OrderPayment? op = null;
 
-    if (orderPaymentId.HasValue)
-      op = await _db.OrderPayments.SingleOrDefaultAsync(x => x.Id == orderPaymentId.Value, ct);
+    if (customGuid.HasValue)
+      op = await _db.OrderPayments.SingleOrDefaultAsync(x => x.Id == customGuid.Value, ct);
 
     if (op is null && !string.IsNullOrWhiteSpace(paypalOrderId))
-      op = await _db.OrderPayments.SingleOrDefaultAsync(x => x.Provider == PaymentProviders.PayPal && x.ProviderCheckoutId == paypalOrderId, ct);
+    {
+      op = await _db.OrderPayments.SingleOrDefaultAsync(
+        x => x.Provider == PaymentProviders.PayPal && x.ProviderCheckoutId == paypalOrderId,
+        ct);
+    }
 
     if (op is not null)
     {
       op.ProviderCheckoutId ??= paypalOrderId;
       op.ProviderPaymentId = captureId ?? op.ProviderPaymentId;
-      op.Status = CheckoutPaymentStatuses.Succeeded; // same status strings
+      op.Status = CheckoutPaymentStatuses.Succeeded;
       op.UpdatedAt = now;
       evt.OrderPaymentId = op.Id;
 
@@ -305,19 +313,20 @@ public sealed class PaymentWebhookService
       return;
     }
 
-    // ---- SHIPPING INVOICES ----
-    Guid? shippingInvoiceId = null;
-
-    if (res.TryGetProperty("custom_id", out var cust2) && Guid.TryParse(cust2.GetString(), out var sid))
-      shippingInvoiceId = sid;
-
+    // ---------------------------------------------------------------------------
+    // 2) SHIPPING INVOICES
+    // ---------------------------------------------------------------------------
     ShippingInvoice? sinv = null;
 
-    if (shippingInvoiceId.HasValue)
-      sinv = await _db.ShippingInvoices.SingleOrDefaultAsync(x => x.Id == shippingInvoiceId.Value, ct);
+    if (customGuid.HasValue)
+      sinv = await _db.ShippingInvoices.SingleOrDefaultAsync(x => x.Id == customGuid.Value, ct);
 
     if (sinv is null && !string.IsNullOrWhiteSpace(paypalOrderId))
-      sinv = await _db.ShippingInvoices.SingleOrDefaultAsync(x => x.Provider == PaymentProviders.PayPal && x.ProviderCheckoutId == paypalOrderId, ct);
+    {
+      sinv = await _db.ShippingInvoices.SingleOrDefaultAsync(
+        x => x.Provider == PaymentProviders.PayPal && x.ProviderCheckoutId == paypalOrderId,
+        ct);
+    }
 
     if (sinv is not null)
     {
@@ -329,22 +338,27 @@ public sealed class PaymentWebhookService
       sinv.PaidAt ??= now;
       sinv.UpdatedAt = now;
 
-      // Enqueue SHIPPING_INVOICE_PAID once (dedupe also protects)
       if (!wasPaid)
       {
         try
         {
-          var group = await _db.FulfillmentGroups.AsNoTracking().SingleOrDefaultAsync(g => g.Id == sinv.FulfillmentGroupId, ct);
+          var group = await _db.FulfillmentGroups
+            .AsNoTracking()
+            .SingleOrDefaultAsync(g => g.Id == sinv.FulfillmentGroupId, ct);
+
           if (group?.UserId is Guid uid)
           {
-            var toEmail = await _db.Users.AsNoTracking()
+            var toEmail = await _db.Users
+              .AsNoTracking()
               .Where(u => u.Id == uid)
               .Select(u => u.Email)
               .SingleOrDefaultAsync(ct);
 
             if (!string.IsNullOrWhiteSpace(toEmail))
             {
-              var payload = $"{{\"invoiceId\":\"{sinv.Id}\",\"groupId\":\"{sinv.FulfillmentGroupId}\",\"amountCents\":{sinv.AmountCents}}}";
+              var payload =
+                $"{{\"invoiceId\":\"{sinv.Id}\",\"groupId\":\"{sinv.FulfillmentGroupId}\",\"amountCents\":{sinv.AmountCents}}}";
+
               await _emails.EnqueueAsync(
                 toEmail: toEmail,
                 templateKey: EmailTemplateKeys.ShippingInvoicePaid,
@@ -355,29 +369,49 @@ public sealed class PaymentWebhookService
             }
           }
         }
-        catch { /* best-effort */ }
+        catch
+        {
+          // best-effort
+        }
       }
 
       evt.ProcessedAt = now;
       await _db.SaveChangesAsync(ct);
-      try { await _shippingInvoicesRealtime.PublishInvoiceAsync(sinv.Id, now, ct); } catch { /* best-effort */ }
+
+      try
+      {
+        await _shippingInvoicesRealtime.PublishInvoiceAsync(sinv.Id, now, ct);
+      }
+      catch
+      {
+        // best-effort
+      }
+
       return;
     }
 
-    // ---- CHECKOUT PAYMENTS (STORE HOLDS) ----
-    // (Kept for backwards compatibility if you also use PayPal for checkout holds)
+    // ---------------------------------------------------------------------------
+    // 3) CHECKOUT PAYMENTS (STORE HOLDS)
+    // ---------------------------------------------------------------------------
     CheckoutPayment? pay = null;
 
-    if (!string.IsNullOrWhiteSpace(paypalOrderId))
+    if (customGuid.HasValue)
     {
-      pay = await _db.CheckoutPayments
-        .SingleOrDefaultAsync(p => p.Provider == PaymentProviders.PayPal && p.ProviderCheckoutId == paypalOrderId, ct);
+      pay = await _db.CheckoutPayments.SingleOrDefaultAsync(x => x.Id == customGuid.Value, ct);
+    }
+
+    if (pay is null && !string.IsNullOrWhiteSpace(paypalOrderId))
+    {
+      pay = await _db.CheckoutPayments.SingleOrDefaultAsync(
+        p => p.Provider == PaymentProviders.PayPal && p.ProviderCheckoutId == paypalOrderId,
+        ct);
     }
 
     if (pay is null && !string.IsNullOrWhiteSpace(captureId))
     {
-      pay = await _db.CheckoutPayments
-        .SingleOrDefaultAsync(p => p.Provider == PaymentProviders.PayPal && p.ProviderPaymentId == captureId, ct);
+      pay = await _db.CheckoutPayments.SingleOrDefaultAsync(
+        p => p.Provider == PaymentProviders.PayPal && p.ProviderPaymentId == captureId,
+        ct);
     }
 
     if (pay is null)
@@ -387,16 +421,40 @@ public sealed class PaymentWebhookService
       return;
     }
 
-    pay.ProviderPaymentId = captureId ?? pay.ProviderPaymentId;
-    pay.Status = CheckoutPaymentStatuses.Succeeded;
-    pay.UpdatedAt = now;
     evt.CheckoutPaymentId = pay.Id;
 
-    _ = await _checkout.ConfirmPaidFromWebhookAsync(
+    // Ensure correlation fields are hydrated even before confirmation.
+    pay.ProviderCheckoutId ??= paypalOrderId;
+    pay.ProviderPaymentId ??= captureId;
+    pay.UpdatedAt = now;
+
+    var confirm = await _checkout.ConfirmPaidFromWebhookAsync(
       pay.HoldId,
       captureId ?? paypalOrderId ?? eventId,
       now,
       ct);
+
+    if (!confirm.Ok)
+    {
+      // Do not mark the payment succeeded if the order/hold confirmation failed.
+      // Persist correlation fields + processed event so retries remain diagnosable and idempotent.
+      evt.ProcessedAt = now;
+      await _db.SaveChangesAsync(ct);
+
+      try
+      {
+        await _checkoutPaymentsRealtime.PublishPaymentAsync(pay.Id, now, ct);
+      }
+      catch
+      {
+        // best-effort
+      }
+
+      return;
+    }
+
+    pay.Status = CheckoutPaymentStatuses.Succeeded;
+    pay.UpdatedAt = now;
 
     evt.ProcessedAt = now;
     await _db.SaveChangesAsync(ct);

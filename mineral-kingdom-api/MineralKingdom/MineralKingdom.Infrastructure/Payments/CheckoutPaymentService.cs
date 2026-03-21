@@ -135,9 +135,9 @@ public sealed class CheckoutPaymentService
   }
 
   public async Task<(bool Ok, string? Error, CheckoutPayment? Payment)> CaptureAsync(
-    Guid paymentId,
-    DateTimeOffset now,
-    CancellationToken ct)
+  Guid paymentId,
+  DateTimeOffset now,
+  CancellationToken ct)
   {
     var payment = await _db.CheckoutPayments.SingleOrDefaultAsync(p => p.Id == paymentId, ct);
     if (payment is null)
@@ -155,6 +155,7 @@ public sealed class CheckoutPaymentService
     if (string.Equals(_opts.Mode, "FAKE", StringComparison.OrdinalIgnoreCase))
     {
       payment.ProviderPaymentId ??= $"CAPTURE-FAKE-{payment.Id:N}";
+      payment.Status = CheckoutPaymentStatuses.Succeeded;
       payment.UpdatedAt = now;
 
       await _db.SaveChangesAsync(ct);
@@ -171,13 +172,19 @@ public sealed class CheckoutPaymentService
     {
       var capture = await paypalProvider.CaptureOrderAsync(payment.ProviderCheckoutId, ct);
 
-      if (!string.IsNullOrWhiteSpace(capture.CaptureId) &&
-          string.IsNullOrWhiteSpace(payment.ProviderPaymentId))
+      payment.ProviderCheckoutId = capture.ProviderCheckoutId;
+      payment.UpdatedAt = now;
+
+      if (!string.IsNullOrWhiteSpace(capture.CaptureId))
       {
         payment.ProviderPaymentId = capture.CaptureId;
       }
 
-      payment.UpdatedAt = now;
+      if (string.Equals(capture.Status, "COMPLETED", StringComparison.OrdinalIgnoreCase) ||
+          string.Equals(capture.Status, "ALREADY_CAPTURED", StringComparison.OrdinalIgnoreCase))
+      {
+        payment.Status = CheckoutPaymentStatuses.Succeeded;
+      }
 
       await _db.SaveChangesAsync(ct);
       await _checkoutPaymentRealtimePublisher.PublishPaymentAsync(payment.Id, now, ct);
@@ -189,6 +196,18 @@ public sealed class CheckoutPaymentService
       ex.Message.StartsWith("PAYPAL_CAPTURE_ORDER_FAILED", StringComparison.OrdinalIgnoreCase) ||
       ex.Message.StartsWith("PAYPAL_", StringComparison.OrdinalIgnoreCase))
     {
+      payment.UpdatedAt = now;
+      await _db.SaveChangesAsync(ct);
+
+      try
+      {
+        await _checkoutPaymentRealtimePublisher.PublishPaymentAsync(payment.Id, now, ct);
+      }
+      catch
+      {
+        // best-effort
+      }
+
       return (false, "PAYPAL_CAPTURE_FAILED", payment);
     }
   }

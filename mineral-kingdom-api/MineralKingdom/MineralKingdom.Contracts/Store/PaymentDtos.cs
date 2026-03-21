@@ -28,6 +28,13 @@ public sealed record StartPaymentResponse(
   string RedirectUrl
 );
 
+public sealed record CapturePaymentResponse(
+  Guid PaymentId,
+  string Provider,
+  string PaymentStatus,
+  string? ProviderPaymentId
+);
+
 public sealed record PaymentStatusResponse(
   Guid PaymentId,
   string Provider,

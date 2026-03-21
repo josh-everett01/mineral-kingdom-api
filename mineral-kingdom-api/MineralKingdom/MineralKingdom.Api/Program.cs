@@ -26,6 +26,7 @@ using MineralKingdom.Infrastructure.Auctions.Realtime;
 using MineralKingdom.Infrastructure.Orders;
 using MineralKingdom.Infrastructure.Store.Realtime;
 using MineralKingdom.Infrastructure.Payments.Realtime;
+using MineralKingdom.Infrastructure.Auctions;
 
 
 
@@ -159,6 +160,7 @@ public class Program
         builder.Services.AddScoped<ICartRealtimePublisher, CartRealtimePublisher>();
         builder.Services.AddSingleton<CheckoutPaymentRealtimeHub>();
         builder.Services.AddScoped<ICheckoutPaymentRealtimePublisher, CheckoutPaymentRealtimePublisher>();
+        builder.Services.AddScoped<AuctionBrowseService>();
         // -------------------------
         // Authorization policy: unverified users cannot bid
         builder.Services.AddAuthorization(options =>

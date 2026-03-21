@@ -12,8 +12,24 @@ namespace MineralKingdom.Api.Controllers;
 public sealed class AuctionRealtimeController : ControllerBase
 {
   private readonly MineralKingdomDbContext _db;
+  private readonly AuctionBrowseService _browse;
 
-  public AuctionRealtimeController(MineralKingdomDbContext db) => _db = db;
+  public AuctionRealtimeController(
+    MineralKingdomDbContext db,
+    AuctionBrowseService browse)
+  {
+    _db = db;
+    _browse = browse;
+  }
+
+  [HttpGet]
+  [AllowAnonymous]
+  public async Task<ActionResult<AuctionBrowseResponseDto>> Browse(CancellationToken ct)
+  {
+    var now = DateTimeOffset.UtcNow;
+    var dto = await _browse.GetPublicBrowseAsync(now, ct);
+    return Ok(dto);
+  }
 
   // Polling fallback (public)
   [HttpGet("{auctionId:guid}")]
@@ -29,9 +45,6 @@ public sealed class AuctionRealtimeController : ControllerBase
     var hasReserve = a.ReservePriceCents is not null;
     var reserveMet = hasReserve ? a.ReserveMet : (bool?)null;
 
-    // Minimum next bid:
-    // - if no bidders yet: starting price
-    // - else: min to beat current price (+ increment rules)
     var minNext = a.BidCount <= 0
       ? a.StartingPriceCents
       : BidIncrementTable.MinToBeatCents(a.CurrentPriceCents);

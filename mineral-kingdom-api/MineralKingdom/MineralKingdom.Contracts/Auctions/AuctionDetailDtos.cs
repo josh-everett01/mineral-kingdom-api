@@ -18,5 +18,6 @@ public sealed record AuctionDetailDto(
   bool? ReserveMet,
   DateTimeOffset ClosingTimeUtc,
   int MinimumNextBidCents,
-  IReadOnlyList<AuctionDetailMediaDto> Media
+  IReadOnlyList<AuctionDetailMediaDto> Media,
+  bool? IsCurrentUserLeading
 );

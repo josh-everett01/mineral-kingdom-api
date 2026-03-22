@@ -14,7 +14,10 @@ public sealed class AuctionDetailService
     _db = db;
   }
 
-  public async Task<AuctionDetailDto?> GetPublicDetailAsync(Guid auctionId, CancellationToken ct)
+  public async Task<AuctionDetailDto?> GetPublicDetailAsync(
+    Guid auctionId,
+    Guid? currentUserId,
+    CancellationToken ct)
   {
     var row = await (
       from auction in _db.Auctions.AsNoTracking()
@@ -31,6 +34,7 @@ public sealed class AuctionDetailService
         auction.BidCount,
         auction.ReservePriceCents,
         auction.ReserveMet,
+        auction.CurrentLeaderUserId,
         ClosingTimeUtc = auction.ClosingWindowEnd ?? auction.CloseTime
       })
       .SingleOrDefaultAsync(ct);
@@ -59,6 +63,12 @@ public sealed class AuctionDetailService
       ? row.CurrentPriceCents
       : BidIncrementTable.MinToBeatCents(row.CurrentPriceCents);
 
+    bool? isCurrentUserLeading = null;
+    if (currentUserId.HasValue)
+    {
+      isCurrentUserLeading = row.CurrentLeaderUserId == currentUserId.Value;
+    }
+
     return new AuctionDetailDto(
       row.AuctionId,
       row.ListingId,
@@ -70,7 +80,8 @@ public sealed class AuctionDetailService
       reserveMet,
       row.ClosingTimeUtc,
       minimumNextBidCents,
-      media
+      media,
+      isCurrentUserLeading
     );
   }
 }

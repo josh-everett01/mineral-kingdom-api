@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -34,7 +35,6 @@ public sealed class AuctionRealtimeController : ControllerBase
     return Ok(dto);
   }
 
-  // Preserve existing snapshot contract
   [HttpGet("{auctionId:guid}")]
   [AllowAnonymous]
   public async Task<ActionResult<AuctionRealtimeSnapshot>> GetSnapshot([FromRoute] Guid auctionId, CancellationToken ct)
@@ -63,13 +63,22 @@ public sealed class AuctionRealtimeController : ControllerBase
     ));
   }
 
-  // New S14-2 public detail endpoint
   [HttpGet("{auctionId:guid}/detail")]
   [AllowAnonymous]
   public async Task<ActionResult<AuctionDetailDto>> GetDetail([FromRoute] Guid auctionId, CancellationToken ct)
   {
-    var dto = await _detail.GetPublicDetailAsync(auctionId, ct);
+    var currentUserId = TryGetCurrentUserId();
+    var dto = await _detail.GetPublicDetailAsync(auctionId, currentUserId, ct);
     if (dto is null) return NotFound();
     return Ok(dto);
+  }
+
+  private Guid? TryGetCurrentUserId()
+  {
+    var raw =
+      User.FindFirstValue(ClaimTypes.NameIdentifier) ??
+      User.FindFirstValue("sub");
+
+    return Guid.TryParse(raw, out var userId) ? userId : null;
   }
 }

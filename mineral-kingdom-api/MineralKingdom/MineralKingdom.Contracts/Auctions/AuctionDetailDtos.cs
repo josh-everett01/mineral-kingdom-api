@@ -19,5 +19,7 @@ public sealed record AuctionDetailDto(
   DateTimeOffset ClosingTimeUtc,
   int MinimumNextBidCents,
   IReadOnlyList<AuctionDetailMediaDto> Media,
-  bool? IsCurrentUserLeading
+  bool? IsCurrentUserLeading,
+  bool? HasCurrentUserBid,
+  int? CurrentUserMaxBidCents
 );

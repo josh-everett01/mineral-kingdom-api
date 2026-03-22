@@ -64,9 +64,33 @@ public sealed class AuctionDetailService
       : BidIncrementTable.MinToBeatCents(row.CurrentPriceCents);
 
     bool? isCurrentUserLeading = null;
+    bool? hasCurrentUserBid = null;
+    int? currentUserMaxBidCents = null;
+
     if (currentUserId.HasValue)
     {
-      isCurrentUserLeading = row.CurrentLeaderUserId == currentUserId.Value;
+      var userMaxBid = await _db.AuctionMaxBids
+        .AsNoTracking()
+        .Where(x => x.AuctionId == auctionId && x.UserId == currentUserId.Value)
+        .Select(x => new
+        {
+          x.UserId,
+          x.MaxBidCents
+        })
+        .SingleOrDefaultAsync(ct);
+
+      if (userMaxBid is null)
+      {
+        hasCurrentUserBid = false;
+        isCurrentUserLeading = false;
+        currentUserMaxBidCents = null;
+      }
+      else
+      {
+        hasCurrentUserBid = true;
+        currentUserMaxBidCents = userMaxBid.MaxBidCents;
+        isCurrentUserLeading = row.CurrentLeaderUserId == currentUserId.Value;
+      }
     }
 
     return new AuctionDetailDto(
@@ -81,7 +105,9 @@ public sealed class AuctionDetailService
       row.ClosingTimeUtc,
       minimumNextBidCents,
       media,
-      isCurrentUserLeading
+      isCurrentUserLeading,
+      hasCurrentUserBid,
+      currentUserMaxBidCents
     );
   }
 }

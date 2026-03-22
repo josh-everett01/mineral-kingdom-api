@@ -75,10 +75,29 @@ public sealed class AuctionRealtimeController : ControllerBase
 
   private Guid? TryGetCurrentUserId()
   {
-    var raw =
-      User.FindFirstValue(ClaimTypes.NameIdentifier) ??
-      User.FindFirstValue("sub");
+    var candidates = new[]
+    {
+    User.FindFirstValue(ClaimTypes.NameIdentifier),
+    User.FindFirstValue("sub"),
+    User.FindFirstValue("userId"),
+    User.FindFirstValue("user_id"),
+    User.FindFirstValue("uid"),
+    User.Identity?.Name
+  };
 
-    return Guid.TryParse(raw, out var userId) ? userId : null;
+    foreach (var candidate in candidates)
+    {
+      if (Guid.TryParse(candidate, out var userId))
+        return userId;
+    }
+
+    // Last-resort fallback: scan all claim values for a GUID.
+    foreach (var claim in User.Claims)
+    {
+      if (Guid.TryParse(claim.Value, out var userId))
+        return userId;
+    }
+
+    return null;
   }
 }

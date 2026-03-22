@@ -161,6 +161,7 @@ public class Program
         builder.Services.AddSingleton<CheckoutPaymentRealtimeHub>();
         builder.Services.AddScoped<ICheckoutPaymentRealtimePublisher, CheckoutPaymentRealtimePublisher>();
         builder.Services.AddScoped<AuctionBrowseService>();
+        builder.Services.AddScoped<AuctionDetailService>();
         // -------------------------
         // Authorization policy: unverified users cannot bid
         builder.Services.AddAuthorization(options =>

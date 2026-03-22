@@ -13,13 +13,16 @@ public sealed class AuctionRealtimeController : ControllerBase
 {
   private readonly MineralKingdomDbContext _db;
   private readonly AuctionBrowseService _browse;
+  private readonly AuctionDetailService _detail;
 
   public AuctionRealtimeController(
     MineralKingdomDbContext db,
-    AuctionBrowseService browse)
+    AuctionBrowseService browse,
+    AuctionDetailService detail)
   {
     _db = db;
     _browse = browse;
+    _detail = detail;
   }
 
   [HttpGet]
@@ -31,7 +34,7 @@ public sealed class AuctionRealtimeController : ControllerBase
     return Ok(dto);
   }
 
-  // Polling fallback (public)
+  // Preserve existing snapshot contract
   [HttpGet("{auctionId:guid}")]
   [AllowAnonymous]
   public async Task<ActionResult<AuctionRealtimeSnapshot>> GetSnapshot([FromRoute] Guid auctionId, CancellationToken ct)
@@ -58,5 +61,15 @@ public sealed class AuctionRealtimeController : ControllerBase
       ClosingWindowEnd: a.ClosingWindowEnd,
       MinimumNextBidCents: minNext
     ));
+  }
+
+  // New S14-2 public detail endpoint
+  [HttpGet("{auctionId:guid}/detail")]
+  [AllowAnonymous]
+  public async Task<ActionResult<AuctionDetailDto>> GetDetail([FromRoute] Guid auctionId, CancellationToken ct)
+  {
+    var dto = await _detail.GetPublicDetailAsync(auctionId, ct);
+    if (dto is null) return NotFound();
+    return Ok(dto);
   }
 }

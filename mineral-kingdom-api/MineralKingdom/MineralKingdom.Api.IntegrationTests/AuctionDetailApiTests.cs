@@ -114,6 +114,7 @@ public sealed class AuctionDetailApiTests : IClassFixture<PostgresContainerFixtu
     body.Media.Should().HaveCount(2);
     body.Media[0].IsPrimary.Should().BeTrue();
     body.Media[0].Url.Should().Be("https://example.com/quartz-primary.jpg");
+    body.CurrentUserBidState.Should().BeNull();
   }
 
   [Fact]
@@ -126,6 +127,232 @@ public sealed class AuctionDetailApiTests : IClassFixture<PostgresContainerFixtu
 
     var response = await client.GetAsync($"/api/auctions/{Guid.NewGuid()}/detail");
     response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+  }
+
+  [Fact]
+  public async Task Get_auction_detail_returns_isCurrentUserLeading_null_for_anonymous_request()
+  {
+    await using var factory = NewFactory();
+    await MigrateAsync(factory);
+
+    var now = DateTimeOffset.UtcNow;
+    Guid auctionId;
+    var leaderUserId = Guid.NewGuid();
+
+    using (var scope = factory.Services.CreateScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var listing = new Listing
+      {
+        Id = Guid.NewGuid(),
+        Title = "Anonymous Detail Auction",
+        Description = "Test",
+        Status = ListingStatuses.Published,
+        QuantityAvailable = 1,
+        QuantityTotal = 1,
+        CreatedAt = now,
+        UpdatedAt = now,
+        PublishedAt = now
+      };
+
+      db.Listings.Add(listing);
+
+      auctionId = Guid.NewGuid();
+
+      db.Auctions.Add(new Auction
+      {
+        Id = auctionId,
+        ListingId = listing.Id,
+        Status = AuctionStatuses.Live,
+        StartingPriceCents = 10000,
+        ReservePriceCents = null,
+        StartTime = now.AddHours(-1),
+        CloseTime = now.AddHours(2),
+        ClosingWindowEnd = null,
+        CurrentPriceCents = 11200,
+        CurrentLeaderUserId = leaderUserId,
+        CurrentLeaderMaxCents = 15000,
+        BidCount = 4,
+        ReserveMet = false,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      await db.SaveChangesAsync();
+    }
+
+    using var client = factory.CreateClient();
+
+    var response = await client.GetAsync($"/api/auctions/{auctionId}/detail");
+    response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    var body = await response.Content.ReadFromJsonAsync<AuctionDetailDto>();
+    body.Should().NotBeNull();
+    body!.IsCurrentUserLeading.Should().BeNull();
+    body.CurrentUserBidState.Should().BeNull();
+  }
+
+  [Fact]
+  public async Task Get_auction_detail_returns_isCurrentUserLeading_true_for_authenticated_leader()
+  {
+    await using var factory = NewFactory();
+    await MigrateAsync(factory);
+
+    var now = DateTimeOffset.UtcNow;
+    Guid auctionId;
+    var leaderUserId = Guid.NewGuid();
+
+    using (var scope = factory.Services.CreateScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var listing = new Listing
+      {
+        Id = Guid.NewGuid(),
+        Title = "Winning Detail Auction",
+        Description = "Test",
+        Status = ListingStatuses.Published,
+        QuantityAvailable = 1,
+        QuantityTotal = 1,
+        CreatedAt = now,
+        UpdatedAt = now,
+        PublishedAt = now
+      };
+
+      db.Listings.Add(listing);
+
+      auctionId = Guid.NewGuid();
+
+      db.Auctions.Add(new Auction
+      {
+        Id = auctionId,
+        ListingId = listing.Id,
+        Status = AuctionStatuses.Live,
+        StartingPriceCents = 10000,
+        ReservePriceCents = null,
+        StartTime = now.AddHours(-1),
+        CloseTime = now.AddHours(2),
+        ClosingWindowEnd = null,
+        CurrentPriceCents = 11200,
+        CurrentLeaderUserId = leaderUserId,
+        CurrentLeaderMaxCents = 15000,
+        BidCount = 4,
+        ReserveMet = false,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.AuctionMaxBids.Add(new AuctionMaxBid
+      {
+        AuctionId = auctionId,
+        UserId = leaderUserId,
+        MaxBidCents = 15000,
+        BidType = "IMMEDIATE",
+        ReceivedAt = now,
+      });
+
+      await db.SaveChangesAsync();
+    }
+
+    using var client = factory.CreateClient();
+    var req = new HttpRequestMessage(HttpMethod.Get, $"/api/auctions/{auctionId}/detail");
+    req.Headers.Add("X-Test-UserId", leaderUserId.ToString());
+
+    var response = await client.SendAsync(req);
+    response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    var body = await response.Content.ReadFromJsonAsync<AuctionDetailDto>();
+    body.Should().NotBeNull();
+
+    body!.IsCurrentUserLeading.Should().BeTrue();
+    body.CurrentUserBidState.Should().Be("LEADING");
+  }
+
+  [Fact]
+  public async Task Get_auction_detail_returns_isCurrentUserLeading_false_for_authenticated_non_leader()
+  {
+    await using var factory = NewFactory();
+    await MigrateAsync(factory);
+
+    var now = DateTimeOffset.UtcNow;
+    Guid auctionId;
+    var leaderUserId = Guid.NewGuid();
+    var otherUserId = Guid.NewGuid();
+
+    using (var scope = factory.Services.CreateScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var listing = new Listing
+      {
+        Id = Guid.NewGuid(),
+        Title = "Outbid Detail Auction",
+        Description = "Test",
+        Status = ListingStatuses.Published,
+        QuantityAvailable = 1,
+        QuantityTotal = 1,
+        CreatedAt = now,
+        UpdatedAt = now,
+        PublishedAt = now
+      };
+
+      db.Listings.Add(listing);
+
+      auctionId = Guid.NewGuid();
+
+      db.Auctions.Add(new Auction
+      {
+        Id = auctionId,
+        ListingId = listing.Id,
+        Status = AuctionStatuses.Live,
+        StartingPriceCents = 10000,
+        ReservePriceCents = null,
+        StartTime = now.AddHours(-1),
+        CloseTime = now.AddHours(2),
+        ClosingWindowEnd = null,
+        CurrentPriceCents = 11200,
+        CurrentLeaderUserId = leaderUserId,
+        CurrentLeaderMaxCents = 15000,
+        BidCount = 4,
+        ReserveMet = false,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.AuctionMaxBids.AddRange(
+        new AuctionMaxBid
+        {
+          AuctionId = auctionId,
+          UserId = leaderUserId,
+          MaxBidCents = 15000,
+          BidType = "IMMEDIATE",
+          ReceivedAt = now,
+        },
+        new AuctionMaxBid
+        {
+          AuctionId = auctionId,
+          UserId = otherUserId,
+          MaxBidCents = 14000,
+          BidType = "IMMEDIATE",
+          ReceivedAt = now,
+        });
+
+      await db.SaveChangesAsync();
+    }
+
+    using var client = factory.CreateClient();
+    var req = new HttpRequestMessage(HttpMethod.Get, $"/api/auctions/{auctionId}/detail");
+    req.Headers.Add("X-Test-UserId", otherUserId.ToString());
+
+    var response = await client.SendAsync(req);
+    response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    var body = await response.Content.ReadFromJsonAsync<AuctionDetailDto>();
+    body.Should().NotBeNull();
+
+    body!.IsCurrentUserLeading.Should().BeFalse();
+    body.CurrentUserBidState.Should().Be("OUTBID");
   }
 
   [Fact]
@@ -200,6 +427,7 @@ public sealed class AuctionDetailApiTests : IClassFixture<PostgresContainerFixtu
     body!.IsCurrentUserLeading.Should().BeNull();
     body.HasCurrentUserBid.Should().BeNull();
     body.CurrentUserMaxBidCents.Should().BeNull();
+    body.CurrentUserBidState.Should().BeNull();
   }
 
   [Fact]
@@ -276,6 +504,7 @@ public sealed class AuctionDetailApiTests : IClassFixture<PostgresContainerFixtu
     body!.HasCurrentUserBid.Should().BeTrue();
     body.IsCurrentUserLeading.Should().BeTrue();
     body.CurrentUserMaxBidCents.Should().Be(15000);
+    body.CurrentUserBidState.Should().Be("LEADING");
   }
 
   [Fact]
@@ -362,6 +591,84 @@ public sealed class AuctionDetailApiTests : IClassFixture<PostgresContainerFixtu
     body!.HasCurrentUserBid.Should().BeTrue();
     body.IsCurrentUserLeading.Should().BeFalse();
     body.CurrentUserMaxBidCents.Should().Be(14000);
+    body.CurrentUserBidState.Should().Be("OUTBID");
+  }
+
+  [Fact]
+  public async Task Get_auction_detail_returns_delayed_pending_state_for_authenticated_delayed_bidder_before_closing()
+  {
+    await using var factory = NewFactory();
+    await MigrateAsync(factory);
+
+    var now = DateTimeOffset.UtcNow;
+    Guid auctionId;
+    var delayedUserId = Guid.NewGuid();
+
+    using (var scope = factory.Services.CreateScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var listing = new Listing
+      {
+        Id = Guid.NewGuid(),
+        Title = "Delayed Detail Auction",
+        Description = "Test",
+        Status = ListingStatuses.Published,
+        QuantityAvailable = 1,
+        QuantityTotal = 1,
+        CreatedAt = now,
+        UpdatedAt = now,
+        PublishedAt = now
+      };
+
+      db.Listings.Add(listing);
+
+      auctionId = Guid.NewGuid();
+
+      db.Auctions.Add(new Auction
+      {
+        Id = auctionId,
+        ListingId = listing.Id,
+        Status = AuctionStatuses.Live,
+        StartingPriceCents = 10000,
+        ReservePriceCents = 15000,
+        StartTime = now.AddHours(-1),
+        CloseTime = now.AddHours(8),
+        ClosingWindowEnd = null,
+        CurrentPriceCents = 10000,
+        CurrentLeaderUserId = null,
+        CurrentLeaderMaxCents = null,
+        BidCount = 0,
+        ReserveMet = false,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.AuctionMaxBids.Add(new AuctionMaxBid
+      {
+        AuctionId = auctionId,
+        UserId = delayedUserId,
+        MaxBidCents = 20000,
+        BidType = "DELAYED",
+        ReceivedAt = now,
+      });
+
+      await db.SaveChangesAsync();
+    }
+
+    using var client = factory.CreateClient();
+    var req = new HttpRequestMessage(HttpMethod.Get, $"/api/auctions/{auctionId}/detail");
+    req.Headers.Add("X-Test-UserId", delayedUserId.ToString());
+
+    var response = await client.SendAsync(req);
+    response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    var body = await response.Content.ReadFromJsonAsync<AuctionDetailDto>();
+    body.Should().NotBeNull();
+    body!.HasCurrentUserBid.Should().BeTrue();
+    body.IsCurrentUserLeading.Should().BeFalse();
+    body.CurrentUserMaxBidCents.Should().Be(20000);
+    body.CurrentUserBidState.Should().Be("DELAYED_PENDING");
   }
 
   [Fact]
@@ -439,6 +746,7 @@ public sealed class AuctionDetailApiTests : IClassFixture<PostgresContainerFixtu
     body!.HasCurrentUserBid.Should().BeFalse();
     body.IsCurrentUserLeading.Should().BeFalse();
     body.CurrentUserMaxBidCents.Should().BeNull();
+    body.CurrentUserBidState.Should().Be("NONE");
   }
 
   private TestAppFactory NewFactory()

@@ -66,30 +66,56 @@ public sealed class AuctionDetailService
     bool? isCurrentUserLeading = null;
     bool? hasCurrentUserBid = null;
     int? currentUserMaxBidCents = null;
+    string? currentUserBidState = null;
 
     if (currentUserId.HasValue)
     {
-      var userMaxBid = await _db.AuctionMaxBids
+      var userMaxBids = await _db.AuctionMaxBids
         .AsNoTracking()
         .Where(x => x.AuctionId == auctionId && x.UserId == currentUserId.Value)
+        .OrderByDescending(x => x.ReceivedAt)
         .Select(x => new
         {
           x.UserId,
-          x.MaxBidCents
+          x.MaxBidCents,
+          x.BidType,
+          x.ReceivedAt
         })
-        .SingleOrDefaultAsync(ct);
+        .ToListAsync(ct);
 
-      if (userMaxBid is null)
+      var latestUserBid = userMaxBids.FirstOrDefault();
+
+      if (latestUserBid is null)
       {
         hasCurrentUserBid = false;
         isCurrentUserLeading = false;
         currentUserMaxBidCents = null;
+        currentUserBidState = "NONE";
       }
       else
       {
         hasCurrentUserBid = true;
-        currentUserMaxBidCents = userMaxBid.MaxBidCents;
+        currentUserMaxBidCents = latestUserBid.MaxBidCents;
         isCurrentUserLeading = row.CurrentLeaderUserId == currentUserId.Value;
+
+        if (isCurrentUserLeading == true)
+        {
+          currentUserBidState = "LEADING";
+        }
+        else
+        {
+          var hasPendingDelayedBid = userMaxBids.Any(x =>
+            string.Equals(x.BidType, "DELAYED", StringComparison.OrdinalIgnoreCase));
+
+          var closingOrLater =
+            string.Equals(row.Status, "CLOSING", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(row.Status, "CLOSED", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(row.Status, "SOLD", StringComparison.OrdinalIgnoreCase);
+
+          currentUserBidState = hasPendingDelayedBid && !closingOrLater
+            ? "DELAYED_PENDING"
+            : "OUTBID";
+        }
       }
     }
 
@@ -107,7 +133,8 @@ public sealed class AuctionDetailService
       media,
       isCurrentUserLeading,
       hasCurrentUserBid,
-      currentUserMaxBidCents
+      currentUserMaxBidCents,
+      currentUserBidState
     );
   }
 }

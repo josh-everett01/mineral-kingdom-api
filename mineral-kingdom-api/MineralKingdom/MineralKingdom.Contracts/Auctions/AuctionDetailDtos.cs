@@ -21,5 +21,6 @@ public sealed record AuctionDetailDto(
   IReadOnlyList<AuctionDetailMediaDto> Media,
   bool? IsCurrentUserLeading,
   bool? HasCurrentUserBid,
-  int? CurrentUserMaxBidCents
+  int? CurrentUserMaxBidCents,
+  string? CurrentUserBidState
 );

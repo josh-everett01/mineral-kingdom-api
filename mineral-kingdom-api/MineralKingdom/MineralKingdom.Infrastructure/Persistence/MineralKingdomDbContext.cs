@@ -39,6 +39,7 @@ public class MineralKingdomDbContext : DbContext
     public DbSet<OrderLedgerEntry> OrderLedgerEntries => Set<OrderLedgerEntry>();
     public DbSet<Auction> Auctions => Set<Auction>();
     public DbSet<AuctionMaxBid> AuctionMaxBids => Set<AuctionMaxBid>();
+    public DbSet<AuctionDelayedBid> AuctionDelayedBids => Set<AuctionDelayedBid>();
     public DbSet<AuctionBidEvent> AuctionBidEvents => Set<AuctionBidEvent>();
     public DbSet<FulfillmentGroup> FulfillmentGroups => Set<FulfillmentGroup>();
     public DbSet<ShippingInvoice> ShippingInvoices => Set<ShippingInvoice>();
@@ -446,6 +447,37 @@ public class MineralKingdomDbContext : DbContext
 
             b.HasIndex(x => new { x.AuctionId, x.ServerReceivedAt })
                 .HasDatabaseName("IX_auction_bid_events_Auction_Time");
+        });
+
+        modelBuilder.Entity<AuctionDelayedBid>(b =>
+        {
+            b.ToTable("auction_delayed_bids");
+            b.HasKey(x => new { x.AuctionId, x.UserId });
+
+            b.Property(x => x.MaxBidCents).IsRequired();
+
+            b.Property(x => x.Status)
+                .IsRequired()
+                .HasMaxLength(20)
+                .HasDefaultValue("SCHEDULED");
+
+            b.Property(x => x.CreatedAt).IsRequired();
+            b.Property(x => x.UpdatedAt).IsRequired();
+
+            b.Property(x => x.CancelledAt);
+            b.Property(x => x.MootedAt);
+            b.Property(x => x.ActivatedAt);
+
+            b.HasOne(x => x.Auction)
+                .WithMany()
+                .HasForeignKey(x => x.AuctionId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasIndex(x => new { x.AuctionId, x.Status })
+                .HasDatabaseName("IX_auction_delayed_bids_Auction_Status");
+
+            b.HasIndex(x => new { x.UserId, x.Status })
+                .HasDatabaseName("IX_auction_delayed_bids_User_Status");
         });
 
         modelBuilder.Entity<StoreOffer>(b =>

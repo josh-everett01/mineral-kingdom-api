@@ -30,7 +30,7 @@ public sealed class AuctionBiddingEngineTests : IClassFixture<PostgresContainerF
     using var client = factory.CreateClient();
     var userId = Guid.NewGuid();
 
-    var req = NewBidRequest(auctionId, userId, emailVerified: true, new { maxBidCents = 1050, mode = "IMMEDIATE" }); // $10.50 invalid
+    var req = NewBidRequest(auctionId, userId, emailVerified: true, new { maxBidCents = 1050, mode = "IMMEDIATE" });
     var resp = await client.SendAsync(req);
 
     resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
@@ -45,18 +45,15 @@ public sealed class AuctionBiddingEngineTests : IClassFixture<PostgresContainerF
     await MigrateAsync(factory);
 
     var now = DateTimeOffset.UtcNow;
-    // Start at $24.00 => increment should be $1, so minToBeat is $25.00
     var (auctionId, _) = await SeedLiveAuctionAsync(factory, now, startingPriceCents: 2400, reservePriceCents: null, closeTime: now.AddHours(6));
 
     using var client = factory.CreateClient();
     var leader = Guid.NewGuid();
     var challenger = Guid.NewGuid();
 
-    // First bid by leader: $24 -> ok (minToBeat doesn't matter yet)
     var r1 = await client.SendAsync(NewBidRequest(auctionId, leader, true, new { maxBidCents = 2400, mode = "IMMEDIATE" }));
     r1.StatusCode.Should().Be(HttpStatusCode.OK);
 
-    // Challenger tries $24 again (needs >= $25 to compete)
     var r2 = await client.SendAsync(NewBidRequest(auctionId, challenger, true, new { maxBidCents = 2400, mode = "IMMEDIATE" }));
     r2.StatusCode.Should().Be(HttpStatusCode.BadRequest);
 
@@ -76,15 +73,12 @@ public sealed class AuctionBiddingEngineTests : IClassFixture<PostgresContainerF
     var a = Guid.NewGuid();
     var b = Guid.NewGuid();
 
-    // A max = $50
     var rA = await client.SendAsync(NewBidRequest(auctionId, a, true, new { maxBidCents = 5000, mode = "IMMEDIATE" }));
     rA.StatusCode.Should().Be(HttpStatusCode.OK);
 
-    // B max = $80
     var rB = await client.SendAsync(NewBidRequest(auctionId, b, true, new { maxBidCents = 8000, mode = "IMMEDIATE" }));
     rB.StatusCode.Should().Be(HttpStatusCode.OK);
 
-    // Verify auction derived fields
     using (var scope = factory.Services.CreateScope())
     {
       var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
@@ -92,9 +86,6 @@ public sealed class AuctionBiddingEngineTests : IClassFixture<PostgresContainerF
 
       auct.CurrentLeaderUserId.Should().Be(b);
       auct.CurrentLeaderMaxCents.Should().Be(8000);
-
-      // runner-up max is 5000. increment at $50 range (50–74 => $3) => 300 cents
-      // price should be 5300 (clamped to winner max, but winner is higher)
       auct.CurrentPriceCents.Should().Be(5300);
     }
 
@@ -132,24 +123,20 @@ public sealed class AuctionBiddingEngineTests : IClassFixture<PostgresContainerF
   }
 
   [Fact]
-  public async Task Delayed_bids_must_be_registered_3h_before_close_and_are_injected_at_closing_start()
+  public async Task Delayed_bids_must_be_registered_3h_before_close_and_are_activated_at_closing_start()
   {
     await using var factory = NewFactory();
     await MigrateAsync(factory);
 
     var now = DateTimeOffset.UtcNow;
-
-    // Close in 4 hours => delayed still allowed (>=3h before close)
-    var (auctionId, listingId) = await SeedLiveAuctionAsync(factory, now, startingPriceCents: 1000, reservePriceCents: null, closeTime: now.AddHours(4));
+    var (auctionId, _) = await SeedLiveAuctionAsync(factory, now, startingPriceCents: 1000, reservePriceCents: null, closeTime: now.AddHours(4));
 
     using var client = factory.CreateClient();
     var delayedUser = Guid.NewGuid();
 
-    // Register delayed $50
     var reg = await client.SendAsync(NewBidRequest(auctionId, delayedUser, true, new { maxBidCents = 5000, mode = "DELAYED" }));
     reg.StatusCode.Should().Be(HttpStatusCode.OK);
 
-    // While LIVE, delayed should not change current leader/price
     using (var scope = factory.Services.CreateScope())
     {
       var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
@@ -158,9 +145,12 @@ public sealed class AuctionBiddingEngineTests : IClassFixture<PostgresContainerF
       auct.Status.Should().Be(AuctionStatuses.Live);
       auct.CurrentLeaderUserId.Should().BeNull();
       auct.CurrentPriceCents.Should().Be(1000);
+
+      var delayed = await db.AuctionDelayedBids.SingleAsync(x => x.AuctionId == auctionId && x.UserId == delayedUser);
+      delayed.MaxBidCents.Should().Be(5000);
+      delayed.Status.Should().Be("SCHEDULED");
     }
 
-    // Force closeTime in past and advance to CLOSING, which should inject delayed bids
     using (var scope = factory.Services.CreateScope())
     {
       var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
@@ -177,7 +167,6 @@ public sealed class AuctionBiddingEngineTests : IClassFixture<PostgresContainerF
       changed.Should().BeTrue(err);
     }
 
-    // After entering CLOSING, delayed bid should be applied (injected)
     using (var scope = factory.Services.CreateScope())
     {
       var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
@@ -187,10 +176,12 @@ public sealed class AuctionBiddingEngineTests : IClassFixture<PostgresContainerF
       auct.CurrentLeaderUserId.Should().Be(delayedUser);
       auct.CurrentLeaderMaxCents.Should().Be(5000);
       auct.CurrentPriceCents.Should().Be(1000 + BidIncrementTable.GetIncrementCents(1000));
-      // single bidder => price can stay at starting price (runner-up = starting)
+
+      var delayed = await db.AuctionDelayedBids.SingleAsync(x => x.AuctionId == auctionId && x.UserId == delayedUser);
+      delayed.Status.Should().Be("ACTIVATED");
+      delayed.ActivatedAt.Should().NotBeNull();
     }
 
-    // Ensure delayed injection event logged (system)
     using (var scope = factory.Services.CreateScope())
     {
       var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
@@ -199,13 +190,91 @@ public sealed class AuctionBiddingEngineTests : IClassFixture<PostgresContainerF
       has.Should().BeTrue();
     }
 
-    // Also ensure the delayed row is now IMMEDIATE
     using (var scope = factory.Services.CreateScope())
     {
       var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
       var mb = await db.AuctionMaxBids.SingleAsync(x => x.AuctionId == auctionId && x.UserId == delayedUser);
       mb.BidType.Should().Be("IMMEDIATE");
+      mb.MaxBidCents.Should().Be(5000);
     }
+  }
+
+  [Fact]
+  public async Task New_delayed_bid_replaces_existing_delayed_bid_for_same_user_and_auction()
+  {
+    await using var factory = NewFactory();
+    await MigrateAsync(factory);
+
+    var now = DateTimeOffset.UtcNow;
+    var (auctionId, _) = await SeedLiveAuctionAsync(factory, now, startingPriceCents: 1000, reservePriceCents: null, closeTime: now.AddHours(4));
+
+    using var client = factory.CreateClient();
+    var userId = Guid.NewGuid();
+
+    var first = await client.SendAsync(NewBidRequest(auctionId, userId, true, new { maxBidCents = 5000, mode = "DELAYED" }));
+    first.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    var second = await client.SendAsync(NewBidRequest(auctionId, userId, true, new { maxBidCents = 7000, mode = "DELAYED" }));
+    second.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    using (var scope = factory.Services.CreateScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var delayedBids = await db.AuctionDelayedBids
+        .Where(x => x.AuctionId == auctionId && x.UserId == userId)
+        .ToListAsync();
+
+      delayedBids.Should().HaveCount(1);
+      delayedBids[0].MaxBidCents.Should().Be(7000);
+      delayedBids[0].Status.Should().Be("SCHEDULED");
+    }
+  }
+
+  [Fact]
+  public async Task Cancel_delayed_bid_marks_it_cancelled_and_returns_no_content()
+  {
+    await using var factory = NewFactory();
+    await MigrateAsync(factory);
+
+    var now = DateTimeOffset.UtcNow;
+    var (auctionId, _) = await SeedLiveAuctionAsync(factory, now, startingPriceCents: 1000, reservePriceCents: null, closeTime: now.AddHours(4));
+
+    using var client = factory.CreateClient();
+    var userId = Guid.NewGuid();
+
+    var reg = await client.SendAsync(NewBidRequest(auctionId, userId, true, new { maxBidCents = 5000, mode = "DELAYED" }));
+    reg.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    var cancel = await client.SendAsync(NewCancelDelayedBidRequest(auctionId, userId, true));
+    cancel.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+    using (var scope = factory.Services.CreateScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var delayed = await db.AuctionDelayedBids.SingleAsync(x => x.AuctionId == auctionId && x.UserId == userId);
+      delayed.Status.Should().Be("CANCELLED");
+      delayed.CancelledAt.Should().NotBeNull();
+    }
+
+    await AssertEventLoggedAsync(factory, auctionId, userId, "DELAYED_BID_CANCELLED", accepted: true);
+  }
+
+  [Fact]
+  public async Task Cancel_delayed_bid_rejects_when_no_delayed_bid_exists()
+  {
+    await using var factory = NewFactory();
+    await MigrateAsync(factory);
+
+    var now = DateTimeOffset.UtcNow;
+    var (auctionId, _) = await SeedLiveAuctionAsync(factory, now, startingPriceCents: 1000, reservePriceCents: null, closeTime: now.AddHours(4));
+
+    using var client = factory.CreateClient();
+    var userId = Guid.NewGuid();
+
+    var cancel = await client.SendAsync(NewCancelDelayedBidRequest(auctionId, userId, true));
+    cancel.StatusCode.Should().Be(HttpStatusCode.BadRequest);
   }
 
   [Fact]
@@ -215,24 +284,20 @@ public sealed class AuctionBiddingEngineTests : IClassFixture<PostgresContainerF
     await MigrateAsync(factory);
 
     var now = DateTimeOffset.UtcNow;
-
-    // Reserve = $60, starting $10
     var (auctionId, _) = await SeedLiveAuctionAsync(factory, now, startingPriceCents: 1000, reservePriceCents: 6000, closeTime: now.AddHours(6));
 
     using var client = factory.CreateClient();
     var user = Guid.NewGuid();
 
-    // Place max $80 => reserve met, current price should lift to reserve (at least)
     var resp = await client.SendAsync(NewBidRequest(auctionId, user, true, new { maxBidCents = 8000, mode = "IMMEDIATE" }));
     resp.StatusCode.Should().Be(HttpStatusCode.OK);
 
     var dto = await resp.Content.ReadFromJsonAsync<PlaceBidResponseWire>();
     dto.Should().NotBeNull();
     dto!.ReserveMet.Should().BeTrue();
-    dto.CurrentPriceCents.Should().Be(6000); // lifted to reserve
+    dto.CurrentPriceCents.Should().Be(6000);
     dto.LeaderUserId.Should().Be(user);
 
-    // Verify no event payload contains reserve value
     using (var scope = factory.Services.CreateScope())
     {
       var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
@@ -271,11 +336,9 @@ public sealed class AuctionBiddingEngineTests : IClassFixture<PostgresContainerF
     {
       var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
 
-      // Derived state should be deterministic: u2 should lead with 8000
       var auct = await db.Auctions.SingleAsync(x => x.Id == auctionId);
       auct.CurrentLeaderUserId.Should().Be(u2);
 
-      // Every attempt logged (accepted or rejected)
       var attemptCount = await db.AuctionBidEvents.CountAsync(e =>
         e.AuctionId == auctionId &&
         (e.EventType == "BID_ACCEPTED" || e.EventType == "BID_REJECTED"));
@@ -284,11 +347,12 @@ public sealed class AuctionBiddingEngineTests : IClassFixture<PostgresContainerF
     }
   }
 
-  // ------------------------
-  // Helpers
-  // ------------------------
-
-  private sealed record PlaceBidResponseWire(int CurrentPriceCents, Guid? LeaderUserId, bool ReserveMet);
+  private sealed record PlaceBidResponseWire(
+    int CurrentPriceCents,
+    Guid? LeaderUserId,
+    bool HasReserve,
+    bool? ReserveMet
+  );
 
   private TestAppFactory NewFactory()
     => new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
@@ -306,6 +370,14 @@ public sealed class AuctionBiddingEngineTests : IClassFixture<PostgresContainerF
     req.Headers.Add("X-Test-UserId", userId.ToString());
     req.Headers.Add("X-Test-EmailVerified", emailVerified ? "true" : "false");
     req.Content = JsonContent.Create(body);
+    return req;
+  }
+
+  private static HttpRequestMessage NewCancelDelayedBidRequest(Guid auctionId, Guid userId, bool emailVerified)
+  {
+    var req = new HttpRequestMessage(HttpMethod.Delete, $"/api/auctions/{auctionId}/delayed-bid");
+    req.Headers.Add("X-Test-UserId", userId.ToString());
+    req.Headers.Add("X-Test-EmailVerified", emailVerified ? "true" : "false");
     return req;
   }
 
@@ -357,7 +429,12 @@ public sealed class AuctionBiddingEngineTests : IClassFixture<PostgresContainerF
     return (auction.Id, listing.Id);
   }
 
-  private static async Task AssertEventLoggedAsync(TestAppFactory factory, Guid auctionId, Guid userId, string eventType, bool accepted)
+  private static async Task AssertEventLoggedAsync(
+    TestAppFactory factory,
+    Guid auctionId,
+    Guid userId,
+    string eventType,
+    bool accepted)
   {
     using var scope = factory.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();

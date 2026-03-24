@@ -35,6 +35,7 @@ public sealed class AuctionDetailService
         auction.ReservePriceCents,
         auction.ReserveMet,
         auction.CurrentLeaderUserId,
+        auction.CurrentLeaderMaxCents,
         ClosingTimeUtc = auction.ClosingWindowEnd ?? auction.CloseTime
       })
       .SingleOrDefaultAsync(ct);
@@ -68,53 +69,91 @@ public sealed class AuctionDetailService
     int? currentUserMaxBidCents = null;
     string? currentUserBidState = null;
 
+    bool? hasPendingDelayedBid = null;
+    int? currentUserDelayedBidCents = null;
+    string? currentUserDelayedBidStatus = null;
+
     if (currentUserId.HasValue)
     {
-      var userMaxBids = await _db.AuctionMaxBids
+      var immediateBid = await _db.AuctionMaxBids
         .AsNoTracking()
         .Where(x => x.AuctionId == auctionId && x.UserId == currentUserId.Value)
-        .OrderByDescending(x => x.ReceivedAt)
         .Select(x => new
         {
-          x.UserId,
           x.MaxBidCents,
           x.BidType,
           x.ReceivedAt
         })
-        .ToListAsync(ct);
+        .SingleOrDefaultAsync(ct);
 
-      var latestUserBid = userMaxBids.FirstOrDefault();
+      var delayedBid = await _db.AuctionDelayedBids
+        .AsNoTracking()
+        .Where(x => x.AuctionId == auctionId && x.UserId == currentUserId.Value)
+        .Select(x => new
+        {
+          x.MaxBidCents,
+          x.Status,
+          x.CreatedAt,
+          x.UpdatedAt,
+          x.CancelledAt,
+          x.MootedAt,
+          x.ActivatedAt
+        })
+        .SingleOrDefaultAsync(ct);
 
-      if (latestUserBid is null)
+      var hasActiveImmediateBid = immediateBid is not null;
+      var hasVisibleDelayedBid =
+        delayedBid is not null &&
+        !string.Equals(delayedBid.Status, "CANCELLED", StringComparison.OrdinalIgnoreCase);
+
+      hasCurrentUserBid = hasActiveImmediateBid || hasVisibleDelayedBid;
+      currentUserMaxBidCents = immediateBid?.MaxBidCents;
+
+      isCurrentUserLeading = hasActiveImmediateBid && row.CurrentLeaderUserId == currentUserId.Value;
+
+      if (!hasActiveImmediateBid)
       {
-        hasCurrentUserBid = false;
-        isCurrentUserLeading = false;
-        currentUserMaxBidCents = null;
         currentUserBidState = "NONE";
+      }
+      else if (isCurrentUserLeading == true)
+      {
+        currentUserBidState = "LEADING";
       }
       else
       {
-        hasCurrentUserBid = true;
-        currentUserMaxBidCents = latestUserBid.MaxBidCents;
-        isCurrentUserLeading = row.CurrentLeaderUserId == currentUserId.Value;
+        currentUserBidState = "OUTBID";
+      }
 
-        if (isCurrentUserLeading == true)
+      if (!hasVisibleDelayedBid)
+      {
+        hasPendingDelayedBid = false;
+        currentUserDelayedBidCents = null;
+        currentUserDelayedBidStatus = "NONE";
+      }
+      else
+      {
+        hasPendingDelayedBid = true;
+        currentUserDelayedBidCents = delayedBid!.MaxBidCents;
+
+        if (string.Equals(delayedBid.Status, "ACTIVATED", StringComparison.OrdinalIgnoreCase))
         {
-          currentUserBidState = "LEADING";
+          currentUserDelayedBidStatus = "ACTIVATED";
         }
         else
         {
-          var hasPendingDelayedBid = userMaxBids.Any(x =>
-            string.Equals(x.BidType, "DELAYED", StringComparison.OrdinalIgnoreCase));
+          var delayedBidMootByPrice = row.CurrentPriceCents >= delayedBid.MaxBidCents;
+          var delayedBidMootByImmediateSupersession =
+            immediateBid is not null &&
+            immediateBid.MaxBidCents >= delayedBid.MaxBidCents;
 
-          var closingOrLater =
-            string.Equals(row.Status, "CLOSING", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(row.Status, "CLOSED", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(row.Status, "SOLD", StringComparison.OrdinalIgnoreCase);
-
-          currentUserBidState = hasPendingDelayedBid && !closingOrLater
-            ? "DELAYED_PENDING"
-            : "OUTBID";
+          if (delayedBidMootByPrice || delayedBidMootByImmediateSupersession)
+          {
+            currentUserDelayedBidStatus = "MOOT";
+          }
+          else
+          {
+            currentUserDelayedBidStatus = "SCHEDULED";
+          }
         }
       }
     }
@@ -134,7 +173,10 @@ public sealed class AuctionDetailService
       isCurrentUserLeading,
       hasCurrentUserBid,
       currentUserMaxBidCents,
-      currentUserBidState
+      currentUserBidState,
+      hasPendingDelayedBid,
+      currentUserDelayedBidCents,
+      currentUserDelayedBidStatus
     );
   }
 }

@@ -25,5 +25,8 @@ public sealed record AuctionDetailDto(
   string? CurrentUserBidState,
   bool? HasPendingDelayedBid,
   int? CurrentUserDelayedBidCents,
-  string? CurrentUserDelayedBidStatus
+  string? CurrentUserDelayedBidStatus,
+  bool? IsCurrentUserWinner,
+  Guid? PaymentOrderId,
+  string? PaymentVisibilityState
 );

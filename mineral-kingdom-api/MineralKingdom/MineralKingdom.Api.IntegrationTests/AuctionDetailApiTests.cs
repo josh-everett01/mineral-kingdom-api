@@ -816,4 +816,268 @@ public sealed class AuctionDetailApiTests : IClassFixture<PostgresContainerFixtu
     var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
     await db.Database.MigrateAsync();
   }
+
+  [Fact]
+  public async Task Get_auction_detail_returns_payment_due_metadata_for_authenticated_winner()
+  {
+    await using var factory = NewFactory();
+    await MigrateAsync(factory);
+
+    var now = DateTimeOffset.UtcNow;
+    Guid auctionId;
+    Guid orderId;
+    var winnerUserId = Guid.NewGuid();
+
+    using (var scope = factory.Services.CreateScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var listing = new Listing
+      {
+        Id = Guid.NewGuid(),
+        Title = "Closed Auction Awaiting Payment",
+        Description = "Test",
+        Status = ListingStatuses.Published,
+        QuantityAvailable = 1,
+        QuantityTotal = 1,
+        CreatedAt = now,
+        UpdatedAt = now,
+        PublishedAt = now
+      };
+
+      db.Listings.Add(listing);
+
+      auctionId = Guid.NewGuid();
+      orderId = Guid.NewGuid();
+
+      db.Auctions.Add(new Auction
+      {
+        Id = auctionId,
+        ListingId = listing.Id,
+        Status = AuctionStatuses.ClosedWaitingOnPayment,
+        StartingPriceCents = 10000,
+        ReservePriceCents = null,
+        StartTime = now.AddHours(-5),
+        CloseTime = now.AddHours(-1),
+        ClosingWindowEnd = now.AddHours(-1),
+        CurrentPriceCents = 18000,
+        CurrentLeaderUserId = winnerUserId,
+        CurrentLeaderMaxCents = 20000,
+        BidCount = 3,
+        ReserveMet = true,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.Orders.Add(new Order
+      {
+        Id = orderId,
+        UserId = winnerUserId,
+        GuestEmail = null,
+        OrderNumber = "MK-TEST-AUCTION-1",
+        SourceType = "AUCTION",
+        AuctionId = auctionId,
+        PaymentDueAt = now.AddDays(2),
+        Status = "AWAITING_PAYMENT",
+        CurrencyCode = "USD",
+        SubtotalCents = 18000,
+        DiscountTotalCents = 0,
+        TotalCents = 18000,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      await db.SaveChangesAsync();
+    }
+
+    using var client = factory.CreateClient();
+    var req = new HttpRequestMessage(HttpMethod.Get, $"/api/auctions/{auctionId}/detail");
+    req.Headers.Add("X-Test-UserId", winnerUserId.ToString());
+
+    var response = await client.SendAsync(req);
+    response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    var body = await response.Content.ReadFromJsonAsync<AuctionDetailDto>();
+    body.Should().NotBeNull();
+
+    body!.IsCurrentUserWinner.Should().BeTrue();
+    body.PaymentOrderId.Should().Be(orderId);
+    body.PaymentVisibilityState.Should().Be("PAYMENT_DUE");
+  }
+
+  [Fact]
+  public async Task Get_auction_detail_returns_no_payment_visibility_for_authenticated_non_winner()
+  {
+    await using var factory = NewFactory();
+    await MigrateAsync(factory);
+
+    var now = DateTimeOffset.UtcNow;
+    Guid auctionId;
+    var winnerUserId = Guid.NewGuid();
+    var viewerUserId = Guid.NewGuid();
+
+    using (var scope = factory.Services.CreateScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var listing = new Listing
+      {
+        Id = Guid.NewGuid(),
+        Title = "Closed Auction Non Winner",
+        Description = "Test",
+        Status = ListingStatuses.Published,
+        QuantityAvailable = 1,
+        QuantityTotal = 1,
+        CreatedAt = now,
+        UpdatedAt = now,
+        PublishedAt = now
+      };
+
+      db.Listings.Add(listing);
+
+      auctionId = Guid.NewGuid();
+
+      db.Auctions.Add(new Auction
+      {
+        Id = auctionId,
+        ListingId = listing.Id,
+        Status = AuctionStatuses.ClosedWaitingOnPayment,
+        StartingPriceCents = 10000,
+        ReservePriceCents = null,
+        StartTime = now.AddHours(-5),
+        CloseTime = now.AddHours(-1),
+        ClosingWindowEnd = now.AddHours(-1),
+        CurrentPriceCents = 18000,
+        CurrentLeaderUserId = winnerUserId,
+        CurrentLeaderMaxCents = 20000,
+        BidCount = 3,
+        ReserveMet = true,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.Orders.Add(new Order
+      {
+        Id = Guid.NewGuid(),
+        UserId = winnerUserId,
+        GuestEmail = null,
+        OrderNumber = "MK-TEST-AUCTION-2",
+        SourceType = "AUCTION",
+        AuctionId = auctionId,
+        PaymentDueAt = now.AddDays(2),
+        Status = "AWAITING_PAYMENT",
+        CurrencyCode = "USD",
+        SubtotalCents = 18000,
+        DiscountTotalCents = 0,
+        TotalCents = 18000,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      await db.SaveChangesAsync();
+    }
+
+    using var client = factory.CreateClient();
+    var req = new HttpRequestMessage(HttpMethod.Get, $"/api/auctions/{auctionId}/detail");
+    req.Headers.Add("X-Test-UserId", viewerUserId.ToString());
+
+    var response = await client.SendAsync(req);
+    response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    var body = await response.Content.ReadFromJsonAsync<AuctionDetailDto>();
+    body.Should().NotBeNull();
+
+    body!.IsCurrentUserWinner.Should().BeFalse();
+    body.PaymentOrderId.Should().BeNull();
+    body.PaymentVisibilityState.Should().Be("NONE");
+  }
+
+  [Fact]
+  public async Task Get_auction_detail_returns_paid_visibility_for_authenticated_winner_when_order_is_paid()
+  {
+    await using var factory = NewFactory();
+    await MigrateAsync(factory);
+
+    var now = DateTimeOffset.UtcNow;
+    Guid auctionId;
+    Guid orderId;
+    var winnerUserId = Guid.NewGuid();
+
+    using (var scope = factory.Services.CreateScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var listing = new Listing
+      {
+        Id = Guid.NewGuid(),
+        Title = "Closed Paid Auction",
+        Description = "Test",
+        Status = ListingStatuses.Published,
+        QuantityAvailable = 1,
+        QuantityTotal = 1,
+        CreatedAt = now,
+        UpdatedAt = now,
+        PublishedAt = now
+      };
+
+      db.Listings.Add(listing);
+
+      auctionId = Guid.NewGuid();
+      orderId = Guid.NewGuid();
+
+      db.Auctions.Add(new Auction
+      {
+        Id = auctionId,
+        ListingId = listing.Id,
+        Status = AuctionStatuses.ClosedPaid,
+        StartingPriceCents = 10000,
+        ReservePriceCents = null,
+        StartTime = now.AddHours(-5),
+        CloseTime = now.AddHours(-1),
+        ClosingWindowEnd = now.AddHours(-1),
+        CurrentPriceCents = 18000,
+        CurrentLeaderUserId = winnerUserId,
+        CurrentLeaderMaxCents = 20000,
+        BidCount = 3,
+        ReserveMet = true,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.Orders.Add(new Order
+      {
+        Id = orderId,
+        UserId = winnerUserId,
+        GuestEmail = null,
+        OrderNumber = "MK-TEST-AUCTION-3",
+        SourceType = "AUCTION",
+        AuctionId = auctionId,
+        PaymentDueAt = now.AddDays(-1),
+        PaidAt = now.AddHours(-2),
+        Status = "READY_TO_FULFILL",
+        CurrencyCode = "USD",
+        SubtotalCents = 18000,
+        DiscountTotalCents = 0,
+        TotalCents = 18000,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      await db.SaveChangesAsync();
+    }
+
+    using var client = factory.CreateClient();
+    var req = new HttpRequestMessage(HttpMethod.Get, $"/api/auctions/{auctionId}/detail");
+    req.Headers.Add("X-Test-UserId", winnerUserId.ToString());
+
+    var response = await client.SendAsync(req);
+    response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    var body = await response.Content.ReadFromJsonAsync<AuctionDetailDto>();
+    body.Should().NotBeNull();
+
+    body!.IsCurrentUserWinner.Should().BeTrue();
+    body.PaymentOrderId.Should().Be(orderId);
+    body.PaymentVisibilityState.Should().Be("PAID");
+  }
 }

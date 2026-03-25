@@ -73,6 +73,10 @@ public sealed class AuctionDetailService
     int? currentUserDelayedBidCents = null;
     string? currentUserDelayedBidStatus = null;
 
+    bool? isCurrentUserWinner = null;
+    Guid? paymentOrderId = null;
+    string? paymentVisibilityState = null;
+
     if (currentUserId.HasValue)
     {
       var immediateBid = await _db.AuctionMaxBids
@@ -156,6 +160,45 @@ public sealed class AuctionDetailService
           }
         }
       }
+
+      var auctionOrder = await _db.Orders
+        .AsNoTracking()
+        .Where(o => o.AuctionId == auctionId)
+        .Select(o => new
+        {
+          o.Id,
+          o.UserId,
+          o.Status,
+          o.PaymentDueAt
+        })
+        .SingleOrDefaultAsync(ct);
+
+      isCurrentUserWinner =
+        auctionOrder is not null &&
+        auctionOrder.UserId == currentUserId.Value;
+
+      if (isCurrentUserWinner == true)
+      {
+        paymentOrderId = auctionOrder!.Id;
+
+        if (string.Equals(auctionOrder.Status, "AWAITING_PAYMENT", StringComparison.OrdinalIgnoreCase))
+        {
+          paymentVisibilityState = "PAYMENT_DUE";
+        }
+        else if (string.Equals(auctionOrder.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase))
+        {
+          paymentVisibilityState = "PAID";
+        }
+        else
+        {
+          paymentVisibilityState = "NONE";
+        }
+      }
+      else
+      {
+        paymentOrderId = null;
+        paymentVisibilityState = "NONE";
+      }
     }
 
     return new AuctionDetailDto(
@@ -176,7 +219,10 @@ public sealed class AuctionDetailService
       currentUserBidState,
       hasPendingDelayedBid,
       currentUserDelayedBidCents,
-      currentUserDelayedBidStatus
+      currentUserDelayedBidStatus,
+      isCurrentUserWinner,
+      paymentOrderId,
+      paymentVisibilityState
     );
   }
 }

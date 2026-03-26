@@ -19,9 +19,9 @@ public sealed class OrderPaymentsController : ControllerBase
   [HttpPost("start")]
   [Authorize(Policy = AuthorizationPolicies.EmailVerified, AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
   public async Task<ActionResult<StartOrderPaymentResponse>> Start(
-  Guid orderId,
-  [FromBody] StartOrderPaymentRequest req,
-  CancellationToken ct)
+    Guid orderId,
+    [FromBody] StartOrderPaymentRequest req,
+    CancellationToken ct)
   {
     var userId = GetUserIdOrThrow(User);
 
@@ -34,11 +34,22 @@ public sealed class OrderPaymentsController : ControllerBase
       ex.Message.Equals("ORDER_NOT_AWAITING_PAYMENT", StringComparison.OrdinalIgnoreCase) ||
       ex.Message.Contains("not awaiting payment", StringComparison.OrdinalIgnoreCase))
     {
-      // State conflict (already paid, expired, or otherwise not payable)
       return Conflict(new { error = "ORDER_NOT_AWAITING_PAYMENT" });
     }
   }
 
+  [HttpGet("/api/order-payments/{paymentId:guid}/confirmation")]
+  public async Task<ActionResult<OrderPaymentConfirmationResponse>> GetConfirmation(
+    Guid paymentId,
+    CancellationToken ct)
+  {
+    var dto = await _svc.GetConfirmationAsync(paymentId, ct);
+
+    if (dto is null)
+      return NotFound(new { error = "PAYMENT_NOT_FOUND" });
+
+    return Ok(dto);
+  }
 
   private static Guid GetUserIdOrThrow(ClaimsPrincipal user)
   {

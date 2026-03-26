@@ -27,6 +27,8 @@ using MineralKingdom.Infrastructure.Orders;
 using MineralKingdom.Infrastructure.Store.Realtime;
 using MineralKingdom.Infrastructure.Payments.Realtime;
 using MineralKingdom.Infrastructure.Auctions;
+using Npgsql;
+using MineralKingdom.Api.Realtime;
 
 
 
@@ -64,6 +66,12 @@ public class Program
 
         builder.Services.AddScoped(sp =>
           sp.GetRequiredService<IDbContextFactory<MineralKingdomDbContext>>().CreateDbContext());
+
+        builder.Services.AddSingleton(sp =>
+        {
+            var cs = DbConnectionFactory.BuildPostgresConnectionString(builder.Configuration);
+            return new NpgsqlDataSourceBuilder(cs).Build();
+        });
 
 
         builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("MK_JWT"));
@@ -134,6 +142,8 @@ public class Program
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Orders.OrderService>();
         builder.Services.AddSingleton<AuctionRealtimeHub>();
         builder.Services.AddScoped<IAuctionRealtimePublisher, AuctionRealtimePublisher>();
+        builder.Services.AddSingleton<IAuctionRealtimeNotifier, PostgresAuctionRealtimeNotifier>();
+        builder.Services.AddHostedService<AuctionRealtimeNotificationListener>();
         builder.Services.AddSingleton<MineralKingdom.Infrastructure.Orders.Realtime.OrderRealtimeHub>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Orders.Realtime.IOrderRealtimePublisher, MineralKingdom.Infrastructure.Orders.Realtime.OrderRealtimePublisher>();
 

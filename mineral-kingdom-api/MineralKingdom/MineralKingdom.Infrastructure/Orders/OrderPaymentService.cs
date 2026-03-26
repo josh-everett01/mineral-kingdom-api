@@ -49,7 +49,7 @@ public sealed class OrderPaymentService
       throw new InvalidOperationException("Order not found.");
 
     if (order.UserId != userId)
-      throw new InvalidOperationException("Order not found."); // avoid leaking existence
+      throw new InvalidOperationException("Order not found.");
 
     if (!string.Equals(order.SourceType, "AUCTION", StringComparison.OrdinalIgnoreCase))
       throw new InvalidOperationException("Order is not an auction order.");
@@ -65,12 +65,8 @@ public sealed class OrderPaymentService
     if (p is null)
       throw new InvalidOperationException("UNSUPPORTED_PROVIDER");
 
-    // Canonicalize to the provider's exact constant value (e.g. "STRIPE", "PAYPAL")
     provider = p.Provider;
 
-
-
-    // Create payment row first so we can correlate via metadata/custom_id
     var op = new OrderPayment
     {
       Id = Guid.NewGuid(),
@@ -86,7 +82,6 @@ public sealed class OrderPaymentService
     _db.OrderPayments.Add(op);
     await _db.SaveChangesAsync(ct);
 
-    // For now, one line item is fine for auctions (single listing at final price)
     var redirect = await p.CreateRedirectAsync(new CreateOrderPaymentRedirectRequest(
       OrderId: order.Id,
       OrderPaymentId: op.Id,
@@ -107,5 +102,55 @@ public sealed class OrderPaymentService
     await _db.SaveChangesAsync(ct);
 
     return new StartOrderPaymentResponse(op.Id, op.Provider, op.Status, redirect.RedirectUrl);
+  }
+
+  public async Task<OrderPaymentConfirmationResponse?> GetConfirmationAsync(
+    Guid paymentId,
+    CancellationToken ct)
+  {
+    var payment = await _db.OrderPayments
+      .AsNoTracking()
+      .Where(p => p.Id == paymentId)
+      .Select(p => new
+      {
+        p.Id,
+        p.Provider,
+        p.Status,
+        p.OrderId
+      })
+      .SingleOrDefaultAsync(ct);
+
+    if (payment is null)
+      return null;
+
+    var order = await _db.Orders
+      .AsNoTracking()
+      .Where(o => o.Id == payment.OrderId)
+      .Select(o => new
+      {
+        o.Id,
+        o.OrderNumber,
+        o.Status,
+        o.TotalCents,
+        o.CurrencyCode
+      })
+      .SingleOrDefaultAsync(ct);
+
+    var isConfirmed =
+      string.Equals(payment.Status, "SUCCEEDED", StringComparison.OrdinalIgnoreCase) &&
+      order is not null &&
+      string.Equals(order.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase);
+
+    return new OrderPaymentConfirmationResponse(
+      PaymentId: payment.Id,
+      Provider: payment.Provider,
+      PaymentStatus: payment.Status,
+      IsConfirmed: isConfirmed,
+      OrderId: order?.Id,
+      OrderNumber: order?.OrderNumber,
+      OrderStatus: order?.Status,
+      OrderTotalCents: order?.TotalCents,
+      OrderCurrencyCode: order?.CurrencyCode
+    );
   }
 }

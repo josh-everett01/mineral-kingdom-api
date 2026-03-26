@@ -444,6 +444,29 @@ public sealed class CheckoutService
 
         _db.Orders.Add(order);
 
+        var checkoutPayment = await _db.CheckoutPayments
+          .Where(p => p.HoldId == hold.Id)
+          .OrderByDescending(p => p.CreatedAt)
+          .ThenByDescending(p => p.Id)
+          .FirstOrDefaultAsync(ct);
+
+        if (checkoutPayment is not null)
+        {
+          _db.OrderPayments.Add(new OrderPayment
+          {
+            Id = Guid.NewGuid(),
+            OrderId = order.Id,
+            Provider = checkoutPayment.Provider,
+            Status = "SUCCEEDED",
+            ProviderCheckoutId = checkoutPayment.ProviderCheckoutId,
+            ProviderPaymentId = checkoutPayment.ProviderPaymentId,
+            AmountCents = order.TotalCents,
+            CurrencyCode = order.CurrencyCode,
+            CreatedAt = now,
+            UpdatedAt = now
+          });
+        }
+
         _db.OrderLedgerEntries.Add(new OrderLedgerEntry
         {
           Id = Guid.NewGuid(),

@@ -23,6 +23,9 @@ public sealed record OrderDto(
   int TotalCents,
   string CurrencyCode,
   string Status,
+  string? PaymentStatus,
+  string? PaymentProvider,
+  DateTimeOffset? PaidAt,
   List<OrderLineDto> Lines
 );
 
@@ -38,4 +41,3 @@ public sealed record OrderLineDto(
   int LineDiscountCents,
   int LineTotalCents
 );
-

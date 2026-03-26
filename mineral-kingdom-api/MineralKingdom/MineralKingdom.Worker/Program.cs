@@ -10,6 +10,7 @@ using MineralKingdom.Infrastructure.Security;
 using MineralKingdom.Infrastructure.Security.Jobs;
 using MineralKingdom.Worker.Cron;
 using MineralKingdom.Worker.Jobs;
+using Npgsql;
 
 namespace MineralKingdom.Worker;
 
@@ -34,6 +35,12 @@ public class Program
               services.AddScoped<JobClaimingService>();
               services.AddScoped<NoopJobHandler>();
 
+              services.AddSingleton(sp =>
+                {
+                    var cs = DbConnectionFactory.BuildPostgresConnectionString(ctx.Configuration);
+                    return new NpgsqlDataSourceBuilder(cs).Build();
+                });
+
 #if DEBUG
               services.AddScoped<AlwaysFailJobHandler>();
 #endif
@@ -46,6 +53,7 @@ public class Program
               services.AddScoped<AuctionBiddingService>();
               services.AddScoped<AuctionStateMachineService>();
               services.AddSingleton<IAuctionRealtimePublisher, NoopAuctionRealtimePublisher>();
+              services.AddSingleton<IAuctionRealtimeNotifier, PostgresAuctionRealtimeNotifier>();
               services.AddScoped<EmailDispatchJobHandler>();
               services.AddScoped<IMKEmailSender, DevNullEmailSender>();
               services.AddScoped<MineralKingdom.Infrastructure.Notifications.EmailOutboxService>();

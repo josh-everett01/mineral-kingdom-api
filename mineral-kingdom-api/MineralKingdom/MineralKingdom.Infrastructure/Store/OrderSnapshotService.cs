@@ -22,7 +22,6 @@ public sealed class OrderSnapshotService
     if (req.Lines.Any(x => x.Quantity <= 0))
       return (false, "QUANTITY_INVALID", null);
 
-    // load offers (must be active and not deleted)
     var offerIds = req.Lines.Select(x => x.OfferId).Distinct().ToList();
 
     var now = DateTimeOffset.UtcNow;
@@ -39,7 +38,6 @@ public sealed class OrderSnapshotService
     if (offers.Count != offerIds.Count)
       return (false, "OFFER_NOT_FOUND_OR_INACTIVE", null);
 
-    // create order + snapshot lines
     var orderId = Guid.NewGuid();
     var createdAt = now;
 
@@ -71,7 +69,6 @@ public sealed class OrderSnapshotService
     {
       var offer = offers.Single(o => o.Id == lineReq.OfferId);
 
-      // defensive validation in case DB contains invalid offer
       var (ok, err) = DiscountPricing.Validate(
         offer.PriceCents,
         offer.DiscountType,
@@ -127,7 +124,6 @@ public sealed class OrderSnapshotService
     order.DiscountTotalCents = (int)discountTotal;
     order.TotalCents = (int)total;
 
-    // attach
     order.Lines = lines;
 
     _db.Orders.Add(order);
@@ -144,46 +140,18 @@ public sealed class OrderSnapshotService
 
     if (order is null) return null;
 
+    var latestPayment = await _db.OrderPayments.AsNoTracking()
+      .Where(p => p.OrderId == orderId)
+      .OrderByDescending(p => p.CreatedAt)
+      .ThenByDescending(p => p.Id)
+      .Select(p => new
+      {
+        p.Status,
+        p.Provider
+      })
+      .FirstOrDefaultAsync(ct);
+
     return new OrderDto(
-  order.Id,
-  order.UserId,
-  order.OrderNumber,
-  order.SourceType,
-  order.AuctionId,
-  order.PaymentDueAt,
-  order.SubtotalCents,
-  order.DiscountTotalCents,
-  order.TotalCents,
-  order.CurrencyCode,
-  order.Status,
-  order.Lines
-    .OrderBy(l => l.CreatedAt)
-    .Select(l => new OrderLineDto(
-      l.Id,
-      l.OfferId,
-      l.ListingId,
-      l.UnitPriceCents,
-      l.UnitDiscountCents,
-      l.UnitFinalPriceCents,
-      l.Quantity,
-      l.LineSubtotalCents,
-      l.LineDiscountCents,
-      l.LineTotalCents
-    ))
-    .ToList()
-);
-  }
-
-  public async Task<List<OrderDto>> ListForUserAsync(Guid userId, CancellationToken ct)
-  {
-    var orders = await _db.Orders
-      .AsNoTracking()
-      .Include(o => o.Lines)
-      .Where(o => o.UserId == userId)
-      .OrderByDescending(o => o.CreatedAt)
-      .ToListAsync(ct);
-
-    return orders.Select(order => new OrderDto(
       order.Id,
       order.UserId,
       order.OrderNumber,
@@ -195,6 +163,9 @@ public sealed class OrderSnapshotService
       order.TotalCents,
       order.CurrencyCode,
       order.Status,
+      latestPayment?.Status,
+      latestPayment?.Provider,
+      order.PaidAt,
       order.Lines
         .OrderBy(l => l.CreatedAt)
         .Select(l => new OrderLineDto(
@@ -210,7 +181,75 @@ public sealed class OrderSnapshotService
           l.LineTotalCents
         ))
         .ToList()
-    )).ToList();
+    );
+  }
+
+  public async Task<List<OrderDto>> ListForUserAsync(Guid userId, CancellationToken ct)
+  {
+    var orders = await _db.Orders
+      .AsNoTracking()
+      .Include(o => o.Lines)
+      .Where(o => o.UserId == userId)
+      .OrderByDescending(o => o.CreatedAt)
+      .ToListAsync(ct);
+
+    var orderIds = orders.Select(o => o.Id).ToList();
+
+    var latestPayments = await _db.OrderPayments.AsNoTracking()
+      .Where(p => orderIds.Contains(p.OrderId))
+      .OrderByDescending(p => p.CreatedAt)
+      .ThenByDescending(p => p.Id)
+      .Select(p => new
+      {
+        p.OrderId,
+        p.Status,
+        p.Provider,
+        p.CreatedAt
+      })
+      .ToListAsync(ct);
+
+    var latestPaymentByOrderId = latestPayments
+      .GroupBy(p => p.OrderId)
+      .ToDictionary(
+        g => g.Key,
+        g => g.First());
+
+    return orders.Select(order =>
+    {
+      latestPaymentByOrderId.TryGetValue(order.Id, out var latestPayment);
+
+      return new OrderDto(
+        order.Id,
+        order.UserId,
+        order.OrderNumber,
+        order.SourceType,
+        order.AuctionId,
+        order.PaymentDueAt,
+        order.SubtotalCents,
+        order.DiscountTotalCents,
+        order.TotalCents,
+        order.CurrencyCode,
+        order.Status,
+        latestPayment?.Status,
+        latestPayment?.Provider,
+        order.PaidAt,
+        order.Lines
+          .OrderBy(l => l.CreatedAt)
+          .Select(l => new OrderLineDto(
+            l.Id,
+            l.OfferId,
+            l.ListingId,
+            l.UnitPriceCents,
+            l.UnitDiscountCents,
+            l.UnitFinalPriceCents,
+            l.Quantity,
+            l.LineSubtotalCents,
+            l.LineDiscountCents,
+            l.LineTotalCents
+          ))
+          .ToList()
+      );
+    }).ToList();
   }
 
   private static string GenerateOrderNumber(DateTimeOffset now)
@@ -219,5 +258,4 @@ public sealed class OrderSnapshotService
     var suffix = Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
     return $"MK-{date}-{suffix}";
   }
-
 }

@@ -146,34 +146,48 @@ public sealed class OrderService
 
     if (order is null) return null;
 
+    var latestPayment = await _db.OrderPayments.AsNoTracking()
+  .Where(p => p.OrderId == order.Id)
+  .OrderByDescending(p => p.CreatedAt)
+  .ThenByDescending(p => p.Id)
+  .Select(p => new
+  {
+    p.Status,
+    p.Provider
+  })
+  .FirstOrDefaultAsync(ct);
+
     return new OrderDto(
-  order.Id,
-  order.UserId,
-  order.OrderNumber,
-  order.SourceType,
-  order.AuctionId,
-  order.PaymentDueAt,
-  order.SubtotalCents,
-  order.DiscountTotalCents,
-  order.TotalCents,
-  order.CurrencyCode,
-  order.Status,
-  order.Lines
-    .OrderBy(l => l.CreatedAt)
-    .Select(l => new OrderLineDto(
-      l.Id,
-      l.OfferId,
-      l.ListingId,
-      l.UnitPriceCents,
-      l.UnitDiscountCents,
-      l.UnitFinalPriceCents,
-      l.Quantity,
-      l.LineSubtotalCents,
-      l.LineDiscountCents,
-      l.LineTotalCents
-    ))
-    .ToList()
-);
+      order.Id,
+      order.UserId,
+      order.OrderNumber,
+      order.SourceType,
+      order.AuctionId,
+      order.PaymentDueAt,
+      order.SubtotalCents,
+      order.DiscountTotalCents,
+      order.TotalCents,
+      order.CurrencyCode,
+      order.Status,
+      latestPayment?.Status,
+      latestPayment?.Provider,
+      order.PaidAt,
+      order.Lines
+        .OrderBy(l => l.CreatedAt)
+        .Select(l => new OrderLineDto(
+          l.Id,
+          l.OfferId,
+          l.ListingId,
+          l.UnitPriceCents,
+          l.UnitDiscountCents,
+          l.UnitFinalPriceCents,
+          l.Quantity,
+          l.LineSubtotalCents,
+          l.LineDiscountCents,
+          l.LineTotalCents
+        ))
+        .ToList()
+    );
   }
 
   private static string GenerateOrderNumber(DateTimeOffset now)

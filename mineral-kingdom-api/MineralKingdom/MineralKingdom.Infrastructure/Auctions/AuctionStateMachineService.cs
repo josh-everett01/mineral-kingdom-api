@@ -12,7 +12,7 @@ public sealed class AuctionStateMachineService
 {
   private readonly MineralKingdomDbContext _db;
   private readonly AuctionBiddingService _bidding;
-  private readonly IAuctionRealtimePublisher _realtime;
+  private readonly IAuctionRealtimeNotifier _notifier;
 
   // Keep these as constants so later stories can configure via options
   private static readonly TimeSpan ClosingWindowDuration = TimeSpan.FromMinutes(10);
@@ -25,19 +25,15 @@ public sealed class AuctionStateMachineService
   public AuctionStateMachineService(
     MineralKingdomDbContext db,
     AuctionBiddingService bidding,
-    IAuctionRealtimePublisher realtime,
+    IAuctionRealtimeNotifier notifier,
     EmailOutboxService emails)
   {
     _db = db;
     _bidding = bidding;
-    _realtime = realtime;
+    _notifier = notifier;
     _emails = emails;
   }
 
-  /// <summary>
-  /// Advances a single auction forward if server rules apply.
-  /// Returns true if a transition happened.
-  /// </summary>
   public async Task<(bool Changed, string? Error)> AdvanceAuctionAsync(Guid auctionId, DateTimeOffset now, CancellationToken ct)
   {
     var a = await _db.Auctions.SingleOrDefaultAsync(x => x.Id == auctionId, ct);
@@ -46,9 +42,6 @@ public sealed class AuctionStateMachineService
     return await AdvanceLoadedAuctionAsync(a, now, ct);
   }
 
-  /// <summary>
-  /// Advances all due auctions based on indexed fields (status + close time / closing window end).
-  /// </summary>
   public async Task<int> AdvanceDueAuctionsAsync(DateTimeOffset now, CancellationToken ct)
   {
     var advanced = 0;
@@ -83,9 +76,9 @@ public sealed class AuctionStateMachineService
       .AsNoTracking()
       .Where(a =>
         a.Status == AuctionStatuses.ClosedNotSold &&
-        a.RelistOfAuctionId == null &&                 // fast-path
-        a.ReservePriceCents != null &&                 // only reserve auctions
-        a.ReserveMet == false &&                       // reserve not met
+        a.RelistOfAuctionId == null &&
+        a.ReservePriceCents != null &&
+        a.ReserveMet == false &&
         a.UpdatedAt <= now.Subtract(RelistDelay))
       .Select(a => a.Id)
       .ToListAsync(ct);
@@ -101,16 +94,12 @@ public sealed class AuctionStateMachineService
 
   private async Task<(bool Changed, string? Error)> AdvanceLoadedAuctionAsync(Auction a, DateTimeOffset now, CancellationToken ct)
   {
-    // -----------------------------
-    // LIVE -> CLOSING
-    // -----------------------------
     if (a.Status == AuctionStatuses.Live)
     {
       if (a.CloseTime > now) return (false, null);
 
       await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
-      // Reload + lock inside the transaction so we’re not acting on a stale entity
       var locked = await _db.Auctions
         .FromSqlInterpolated($@"SELECT * FROM auctions WHERE ""Id"" = {a.Id} FOR UPDATE")
         .SingleOrDefaultAsync(ct);
@@ -121,7 +110,6 @@ public sealed class AuctionStateMachineService
         return (false, "AUCTION_NOT_FOUND");
       }
 
-      // Another worker might have already pushed it forward
       if (locked.Status != AuctionStatuses.Live)
       {
         await tx.CommitAsync(ct);
@@ -155,31 +143,25 @@ public sealed class AuctionStateMachineService
 
       await _db.SaveChangesAsync(ct);
 
-      // Inject delayed bids at closing start (must be within same tx)
       var (ok, err) = await _bidding.InjectDelayedBidsAtClosingStartAsync(locked.Id, now, ct);
       if (!ok)
       {
         await tx.RollbackAsync(ct);
-        return (false, err); // rollback keeps us atomic
+        return (false, err);
       }
 
       await _db.SaveChangesAsync(ct);
       await tx.CommitAsync(ct);
 
-      // ✅ Publish AFTER commit
-      try { await _realtime.PublishAuctionAsync(locked.Id, now, ct); } catch { /* best-effort */ }
+      try { await _notifier.NotifyAuctionChangedAsync(locked.Id, ct); } catch { }
 
       return (true, null);
     }
 
-    // -----------------------------
-    // CLOSING -> CLOSED_*
-    // -----------------------------
     if (a.Status == AuctionStatuses.Closing)
     {
       await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
-      // Reload + lock inside transaction (same as LIVE->CLOSING)
       var locked = await _db.Auctions
         .FromSqlInterpolated($@"SELECT * FROM auctions WHERE ""Id"" = {a.Id} FOR UPDATE")
         .SingleOrDefaultAsync(ct);
@@ -190,12 +172,10 @@ public sealed class AuctionStateMachineService
         return (false, "AUCTION_NOT_FOUND");
       }
 
-      // Another worker may have moved it already
       if (locked.Status != AuctionStatuses.Closing)
       {
         await tx.CommitAsync(ct);
 
-        // S6-4: Winning bid email (mandatory) - enqueue after commit
         if (locked.Status == AuctionStatuses.ClosedWaitingOnPayment)
         {
           try
@@ -225,8 +205,9 @@ public sealed class AuctionStateMachineService
               }
             }
           }
-          catch { /* best-effort */ }
+          catch { }
         }
+
         return (false, null);
       }
 
@@ -236,7 +217,6 @@ public sealed class AuctionStateMachineService
         return (false, "CLOSING_WINDOW_END_MISSING");
       }
 
-      // Quiet-window rule: only close if the window has actually expired
       if (locked.ClosingWindowEnd > now)
       {
         await tx.CommitAsync(ct);
@@ -245,7 +225,6 @@ public sealed class AuctionStateMachineService
 
       var from = locked.Status;
 
-      // Deterministic resolution based on derived state
       if (locked.BidCount <= 0)
       {
         locked.Status = AuctionStatuses.ClosedNotSold;
@@ -277,19 +256,15 @@ public sealed class AuctionStateMachineService
         await _db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
 
-        // ✅ Publish AFTER commit
-        try { await _realtime.PublishAuctionAsync(locked.Id, now, ct); } catch { /* best-effort */ }
+        try { await _notifier.NotifyAuctionChangedAsync(locked.Id, ct); } catch { }
 
         return (true, null);
       }
       catch (DbUpdateException ex) when (ex.InnerException is PostgresException pg && pg.SqlState == PostgresErrorCodes.UniqueViolation)
       {
-        // If the unique violation is from UX_orders_AuctionId due to a race,
-        // treat as idempotent success.
         await tx.RollbackAsync(ct);
 
-        // ✅ Best-effort publish a fresh snapshot (another worker likely won the race)
-        try { await _realtime.PublishAuctionAsync(a.Id, now, ct); } catch { /* best-effort */ }
+        try { await _notifier.NotifyAuctionChangedAsync(a.Id, ct); } catch { }
 
         return (true, null);
       }
@@ -302,7 +277,6 @@ public sealed class AuctionStateMachineService
   {
     await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
-    // Lock the old auction row (prevents double relist from concurrent workers)
     var old = await _db.Auctions
       .FromSqlInterpolated($@"SELECT * FROM auctions WHERE ""Id"" = {oldAuctionId} FOR UPDATE")
       .SingleOrDefaultAsync(ct);
@@ -321,19 +295,16 @@ public sealed class AuctionStateMachineService
 
     if (old.ReservePriceCents is null || old.ReserveMet)
     {
-      // Not a reserve-not-met outcome => no relist per S5-3 rules
       await tx.CommitAsync(ct);
       return (false, null);
     }
 
-    // Ensure delay window has elapsed (defensive: sweep already filtered)
     if (old.UpdatedAt > now.Subtract(RelistDelay))
     {
       await tx.CommitAsync(ct);
       return (false, null);
     }
 
-    // Idempotency: do not create if already relisted
     var exists = await _db.Auctions
       .AsNoTracking()
       .AnyAsync(a => a.RelistOfAuctionId == old.Id, ct);
@@ -344,13 +315,11 @@ public sealed class AuctionStateMachineService
       return (false, null);
     }
 
-    // Duration: prefer (Close - Start) if StartTime exists, else default
     var duration =
       old.StartTime is not null
         ? old.CloseTime - old.StartTime.Value
         : DefaultAuctionDuration;
 
-    // Guard against weird/negative durations
     if (duration <= TimeSpan.Zero)
       duration = DefaultAuctionDuration;
 
@@ -361,29 +330,23 @@ public sealed class AuctionStateMachineService
       Id = newAuctionId,
       ListingId = old.ListingId,
       RelistOfAuctionId = old.Id,
-
       Status = AuctionStatuses.Live,
-
       StartingPriceCents = old.StartingPriceCents,
       ReservePriceCents = old.ReservePriceCents,
-
       StartTime = now,
       CloseTime = now.Add(duration),
       ClosingWindowEnd = null,
-
       CurrentPriceCents = old.StartingPriceCents,
       CurrentLeaderUserId = null,
       CurrentLeaderMaxCents = null,
       BidCount = 0,
       ReserveMet = false,
-
       CreatedAt = now,
       UpdatedAt = now
     };
 
     _db.Auctions.Add(relisted);
 
-    // Event on old
     _db.AuctionBidEvents.Add(new AuctionBidEvent
     {
       Id = Guid.NewGuid(),
@@ -394,7 +357,6 @@ public sealed class AuctionStateMachineService
       ServerReceivedAt = now
     });
 
-    // Event on new
     _db.AuctionBidEvents.Add(new AuctionBidEvent
     {
       Id = Guid.NewGuid(),
@@ -410,9 +372,8 @@ public sealed class AuctionStateMachineService
       await _db.SaveChangesAsync(ct);
       await tx.CommitAsync(ct);
 
-      // ✅ Publish AFTER commit: old + new
-      try { await _realtime.PublishAuctionAsync(old.Id, now, ct); } catch { /* best-effort */ }
-      try { await _realtime.PublishAuctionAsync(newAuctionId, now, ct); } catch { /* best-effort */ }
+      try { await _notifier.NotifyAuctionChangedAsync(old.Id, ct); } catch { }
+      try { await _notifier.NotifyAuctionChangedAsync(newAuctionId, ct); } catch { }
 
       return (true, null);
     }
@@ -420,8 +381,7 @@ public sealed class AuctionStateMachineService
     {
       await tx.RollbackAsync(ct);
 
-      // Best-effort publish old (another worker likely relisted)
-      try { await _realtime.PublishAuctionAsync(oldAuctionId, now, ct); } catch { /* best-effort */ }
+      try { await _notifier.NotifyAuctionChangedAsync(oldAuctionId, ct); } catch { }
 
       return (false, null);
     }
@@ -429,11 +389,9 @@ public sealed class AuctionStateMachineService
 
   private async Task EnsureUnpaidAuctionOrderExistsAsync(Auction locked, DateTimeOffset now, CancellationToken ct)
   {
-    // Only for sold path; winner must exist
     if (locked.CurrentLeaderUserId is null)
       throw new InvalidOperationException("Sold auction must have a winner (CurrentLeaderUserId).");
 
-    // Idempotency: one order per auction (also enforced by UX_orders_AuctionId)
     var exists = await _db.Orders.AnyAsync(o => o.AuctionId == locked.Id, ct);
     if (exists) return;
 
@@ -449,21 +407,16 @@ public sealed class AuctionStateMachineService
       UserId = locked.CurrentLeaderUserId,
       GuestEmail = null,
       OrderNumber = GenerateOrderNumber(now),
-
       CheckoutHoldId = null,
-
       SourceType = "AUCTION",
       AuctionId = locked.Id,
       PaymentDueAt = now.Add(DefaultAuctionPaymentWindow),
-
       Status = "AWAITING_PAYMENT",
       PaidAt = null,
-
       SubtotalCents = total,
       DiscountTotalCents = 0,
       TotalCents = total,
       CurrencyCode = "USD",
-
       CreatedAt = now,
       UpdatedAt = now,
       Lines = new List<OrderLine>()
@@ -475,7 +428,6 @@ public sealed class AuctionStateMachineService
       OrderId = orderId,
       OfferId = null,
       ListingId = locked.ListingId,
-
       UnitPriceCents = total,
       UnitDiscountCents = 0,
       UnitFinalPriceCents = total,
@@ -483,7 +435,6 @@ public sealed class AuctionStateMachineService
       LineSubtotalCents = total,
       LineDiscountCents = 0,
       LineTotalCents = total,
-
       CreatedAt = now,
       UpdatedAt = now
     });

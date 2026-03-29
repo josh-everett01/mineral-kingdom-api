@@ -1,9 +1,14 @@
+using MineralKingdom.Contracts.Store;
+
 namespace MineralKingdom.Contracts.Orders;
 
 public sealed record OrderRealtimeSnapshot(
   Guid OrderId,
   Guid? UserId,
+  string OrderNumber,
   string Status,
+  string? PaymentStatus,
+  string? PaymentProvider,
   DateTimeOffset? PaidAt,
   DateTimeOffset? PaymentDueAt,
   int TotalCents,
@@ -11,5 +16,6 @@ public sealed record OrderRealtimeSnapshot(
   string SourceType,
   Guid? AuctionId,
   Guid? FulfillmentGroupId,
-  DateTimeOffset UpdatedAt
+  DateTimeOffset UpdatedAt,
+  List<OrderTimelineEntryDto>? NewTimelineEntries
 );

@@ -17,6 +17,8 @@ public sealed record OrderDto(
   string OrderNumber,
   string SourceType,
   Guid? AuctionId,
+  DateTimeOffset CreatedAt,
+  DateTimeOffset UpdatedAt,
   DateTimeOffset? PaymentDueAt,
   int SubtotalCents,
   int DiscountTotalCents,
@@ -26,13 +28,31 @@ public sealed record OrderDto(
   string? PaymentStatus,
   string? PaymentProvider,
   DateTimeOffset? PaidAt,
+  Guid? FulfillmentGroupId,
+  OrderStatusHistoryDto StatusHistory,
   List<OrderLineDto> Lines
+);
+
+public sealed record OrderStatusHistoryDto(
+  List<OrderTimelineEntryDto> Entries
+);
+
+public sealed record OrderTimelineEntryDto(
+  string Type,
+  string Title,
+  string? Description,
+  DateTimeOffset OccurredAt
 );
 
 public sealed record OrderLineDto(
   Guid Id,
   Guid? OfferId,
   Guid ListingId,
+  string? ListingSlug,
+  string Title,
+  string? PrimaryImageUrl,
+  string? MineralName,
+  string? Locality,
   int UnitPriceCents,
   int UnitDiscountCents,
   int UnitFinalPriceCents,

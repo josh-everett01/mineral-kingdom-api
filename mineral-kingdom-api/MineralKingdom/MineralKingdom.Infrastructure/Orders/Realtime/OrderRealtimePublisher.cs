@@ -17,24 +17,56 @@ public sealed class OrderRealtimePublisher : IOrderRealtimePublisher
 
   public async Task PublishOrderAsync(Guid orderId, DateTimeOffset now, CancellationToken ct)
   {
-    var o = await _db.Orders
+    var order = await _db.Orders
       .AsNoTracking()
-      .SingleOrDefaultAsync(x => x.Id == orderId, ct);
+      .Where(x => x.Id == orderId)
+      .Select(x => new
+      {
+        x.Id,
+        x.UserId,
+        x.OrderNumber,
+        x.Status,
+        x.PaidAt,
+        x.PaymentDueAt,
+        x.TotalCents,
+        x.CurrencyCode,
+        x.SourceType,
+        x.AuctionId,
+        x.FulfillmentGroupId,
+        x.UpdatedAt
+      })
+      .SingleOrDefaultAsync(ct);
 
-    if (o is null) return;
+    if (order is null) return;
+
+    var latestPayment = await _db.OrderPayments
+      .AsNoTracking()
+      .Where(p => p.OrderId == orderId)
+      .OrderByDescending(p => p.CreatedAt)
+      .ThenByDescending(p => p.Id)
+      .Select(p => new
+      {
+        p.Status,
+        p.Provider
+      })
+      .FirstOrDefaultAsync(ct);
 
     _hub.Publish(orderId, new OrderRealtimeSnapshot(
-      OrderId: o.Id,
-      UserId: o.UserId,
-      Status: o.Status,
-      PaidAt: o.PaidAt,
-      PaymentDueAt: o.PaymentDueAt,
-      TotalCents: o.TotalCents,
-      CurrencyCode: o.CurrencyCode,
-      SourceType: o.SourceType,
-      AuctionId: o.AuctionId,
-      FulfillmentGroupId: o.FulfillmentGroupId,
-      UpdatedAt: o.UpdatedAt
+      OrderId: order.Id,
+      UserId: order.UserId,
+      OrderNumber: order.OrderNumber,
+      Status: order.Status,
+      PaymentStatus: latestPayment?.Status,
+      PaymentProvider: latestPayment?.Provider,
+      PaidAt: order.PaidAt,
+      PaymentDueAt: order.PaymentDueAt,
+      TotalCents: order.TotalCents,
+      CurrencyCode: order.CurrencyCode,
+      SourceType: order.SourceType,
+      AuctionId: order.AuctionId,
+      FulfillmentGroupId: order.FulfillmentGroupId,
+      UpdatedAt: order.UpdatedAt,
+      NewTimelineEntries: null
     ));
   }
 }

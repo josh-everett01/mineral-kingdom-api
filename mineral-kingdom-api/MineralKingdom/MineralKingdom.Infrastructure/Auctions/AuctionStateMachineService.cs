@@ -333,6 +333,7 @@ public sealed class AuctionStateMachineService
       Status = AuctionStatuses.Live,
       StartingPriceCents = old.StartingPriceCents,
       ReservePriceCents = old.ReservePriceCents,
+      QuotedShippingCents = old.QuotedShippingCents,
       StartTime = now,
       CloseTime = now.Add(duration),
       ClosingWindowEnd = null,
@@ -411,6 +412,10 @@ public sealed class AuctionStateMachineService
       SourceType = "AUCTION",
       AuctionId = locked.Id,
       PaymentDueAt = now.Add(DefaultAuctionPaymentWindow),
+
+      ShippingMode = "UNSELECTED",
+      ShippingAmountCents = 0,
+
       Status = "AWAITING_PAYMENT",
       PaidAt = null,
       SubtotalCents = total,

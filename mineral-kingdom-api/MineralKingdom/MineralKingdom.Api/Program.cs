@@ -144,6 +144,7 @@ public class Program
         builder.Services.AddScoped<IAuctionRealtimePublisher, AuctionRealtimePublisher>();
         builder.Services.AddSingleton<IAuctionRealtimeNotifier, PostgresAuctionRealtimeNotifier>();
         builder.Services.AddHostedService<AuctionRealtimeNotificationListener>();
+        builder.Services.AddScoped<AuctionShippingChoiceService>();
         builder.Services.AddSingleton<MineralKingdom.Infrastructure.Orders.Realtime.OrderRealtimeHub>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Orders.Realtime.IOrderRealtimePublisher, MineralKingdom.Infrastructure.Orders.Realtime.OrderRealtimePublisher>();
 

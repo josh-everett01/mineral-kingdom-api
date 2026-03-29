@@ -31,10 +31,15 @@ public sealed class OrderPaymentsController : ControllerBase
       return Ok(res);
     }
     catch (InvalidOperationException ex) when (
-      ex.Message.Equals("ORDER_NOT_AWAITING_PAYMENT", StringComparison.OrdinalIgnoreCase) ||
-      ex.Message.Contains("not awaiting payment", StringComparison.OrdinalIgnoreCase))
+  ex.Message.Equals("ORDER_NOT_AWAITING_PAYMENT", StringComparison.OrdinalIgnoreCase) ||
+  ex.Message.Contains("not awaiting payment", StringComparison.OrdinalIgnoreCase))
     {
       return Conflict(new { error = "ORDER_NOT_AWAITING_PAYMENT" });
+    }
+    catch (InvalidOperationException ex) when (
+      ex.Message.Equals("AUCTION_SHIPPING_CHOICE_REQUIRED", StringComparison.OrdinalIgnoreCase))
+    {
+      return Conflict(new { error = "AUCTION_SHIPPING_CHOICE_REQUIRED" });
     }
   }
 

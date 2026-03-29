@@ -20,6 +20,8 @@ public sealed record OrderDto(
   DateTimeOffset CreatedAt,
   DateTimeOffset UpdatedAt,
   DateTimeOffset? PaymentDueAt,
+  string ShippingMode,
+  int ShippingAmountCents,
   int SubtotalCents,
   int DiscountTotalCents,
   int TotalCents,

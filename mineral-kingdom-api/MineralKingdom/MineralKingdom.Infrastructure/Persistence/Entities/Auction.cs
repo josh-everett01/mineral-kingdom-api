@@ -13,6 +13,10 @@ public sealed class Auction
   public int StartingPriceCents { get; set; }
   public int? ReservePriceCents { get; set; }
 
+  // Buyer-visible quoted shipping amount for this auction.
+  // Used for the standard "Ship now" payment path and shown on auction detail screens.
+  public int? QuotedShippingCents { get; set; }
+
   // Timing (server authoritative)
   public DateTimeOffset? StartTime { get; set; } // optional in S5-1
   public DateTimeOffset CloseTime { get; set; }

@@ -243,6 +243,8 @@ public sealed class OrderSnapshotService
       order.CreatedAt,
       order.UpdatedAt,
       order.PaymentDueAt,
+      order.ShippingMode,
+      order.ShippingAmountCents,
       order.SubtotalCents,
       order.DiscountTotalCents,
       order.TotalCents,
@@ -258,18 +260,18 @@ public sealed class OrderSnapshotService
   }
 
   private OrderStatusHistoryDto BuildStatusHistory(
-    Order order,
-    IReadOnlyList<PaymentHistoryEntry> payments,
-    IReadOnlyList<LedgerHistoryEntry> ledgerEntries)
+  Order order,
+  IReadOnlyList<PaymentHistoryEntry> payments,
+  IReadOnlyList<LedgerHistoryEntry> ledgerEntries)
   {
     var entries = new List<OrderTimelineEntryDto>
-    {
-      new(
-        Type: "ORDER_CREATED",
-        Title: "Order created",
-        Description: $"Order {order.OrderNumber} was created.",
-        OccurredAt: order.CreatedAt)
-    };
+  {
+    new(
+      Type: "ORDER_CREATED",
+      Title: "Order created",
+      Description: $"Order {order.OrderNumber} was created.",
+      OccurredAt: order.CreatedAt)
+  };
 
     if (order.PaymentDueAt is not null &&
         string.Equals(order.Status, "AWAITING_PAYMENT", StringComparison.OrdinalIgnoreCase))
@@ -314,7 +316,18 @@ public sealed class OrderSnapshotService
       .ThenBy(x => x.Type, StringComparer.Ordinal)
       .ToList();
 
-    return new OrderStatusHistoryDto(ordered);
+    var deduped = ordered
+      .GroupBy(x => new
+      {
+        Type = x.Type ?? "",
+        Title = x.Title ?? "",
+        Description = x.Description ?? "",
+        x.OccurredAt
+      })
+      .Select(g => g.First())
+      .ToList();
+
+    return new OrderStatusHistoryDto(deduped);
   }
 
   private static OrderTimelineEntryDto? MapPaymentTimelineEntry(PaymentHistoryEntry payment)

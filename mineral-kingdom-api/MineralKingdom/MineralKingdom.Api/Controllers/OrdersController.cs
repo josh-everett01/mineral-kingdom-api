@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MineralKingdom.Api.Security;
+using MineralKingdom.Contracts.Orders;
 using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Orders;
 using MineralKingdom.Infrastructure.Store;
@@ -12,20 +13,24 @@ namespace MineralKingdom.Api.Controllers;
 public sealed class OrdersController : ControllerBase
 {
   private readonly OrderSnapshotService _svc;
-
   private readonly OrderService _orders;
+  private readonly AuctionShippingChoiceService _auctionShippingChoices;
 
-  public OrdersController(OrderSnapshotService svc, OrderService orders)
+  public OrdersController(
+    OrderSnapshotService svc,
+    OrderService orders,
+    AuctionShippingChoiceService auctionShippingChoices)
   {
     _svc = svc;
     _orders = orders;
+    _auctionShippingChoices = auctionShippingChoices;
   }
 
   [Authorize]
   [HttpPost]
   public async Task<ActionResult<OrderIdResponse>> CreateDraft([FromBody] CreateOrderRequest req, CancellationToken ct)
   {
-    var userId = User.GetUserId(); // consistent with your existing auth helpers
+    var userId = User.GetUserId();
     var (ok, err, orderId) = await _svc.CreateDraftOrderAsync(userId, req, ct);
 
     if (!ok) return BadRequest(new { error = err });
@@ -49,11 +54,31 @@ public sealed class OrdersController : ControllerBase
     var dto = await _svc.GetOrderAsync(id, ct);
     if (dto is null) return NotFound(new { error = "ORDER_NOT_FOUND" });
 
-    // optional: enforce ownership
     var userId = User.GetUserId();
     if (dto.UserId != userId) return Forbid();
 
     return Ok(dto);
+  }
+
+  [Authorize]
+  [HttpPost("{id:guid}/auction-shipping-choice")]
+  public async Task<ActionResult<AuctionShippingChoiceResponse>> SetAuctionShippingChoice(
+    Guid id,
+    [FromBody] SetAuctionShippingChoiceRequest req,
+    CancellationToken ct)
+  {
+    var userId = User.GetUserId();
+
+    var (ok, err, response) = await _auctionShippingChoices.SetChoiceAsync(
+      id,
+      userId,
+      req.ShippingMode,
+      ct);
+
+    if (!ok)
+      return BadRequest(new { error = err });
+
+    return Ok(response);
   }
 
   [AllowAnonymous]

@@ -242,6 +242,11 @@ public sealed class AuctionStateMachineTests : IClassFixture<PostgresContainerFi
       order.UserId.Should().Be(winnerUserId);
       order.PaymentDueAt.Should().NotBeNull();
       order.PaymentDueAt!.Value.Should().BeAfter(now.AddHours(47)); // loose check
+      order!.ShippingMode.Should().Be("UNSELECTED");
+      order.ShippingAmountCents.Should().Be(0);
+      order.SubtotalCents.Should().Be(1300);
+      order.DiscountTotalCents.Should().Be(0);
+      order.TotalCents.Should().Be(1300);
       order.Lines.Should().HaveCount(1);
       order.Lines[0].OfferId.Should().BeNull();
       order.Lines[0].ListingId.Should().Be(a.ListingId);

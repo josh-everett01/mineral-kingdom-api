@@ -36,19 +36,20 @@ public sealed class OrderPaymentService
     var now = _time.GetUtcNow();
 
     var order = await _db.Orders
-      .AsNoTracking()
-      .Where(o => o.Id == orderId)
-      .Select(o => new
-      {
-        o.Id,
-        o.UserId,
-        o.SourceType,
-        o.Status,
-        o.TotalCents,
-        o.CurrencyCode,
-        o.PaymentDueAt
-      })
-      .SingleOrDefaultAsync(ct);
+        .AsNoTracking()
+        .Where(o => o.Id == orderId)
+        .Select(o => new
+        {
+          o.Id,
+          o.UserId,
+          o.SourceType,
+          o.Status,
+          o.ShippingMode,
+          o.TotalCents,
+          o.CurrencyCode,
+          o.PaymentDueAt
+        })
+        .SingleOrDefaultAsync(ct);
 
     if (order is null)
       throw new InvalidOperationException("Order not found.");
@@ -61,6 +62,9 @@ public sealed class OrderPaymentService
 
     if (!string.Equals(order.Status, "AWAITING_PAYMENT", StringComparison.OrdinalIgnoreCase))
       throw new InvalidOperationException("ORDER_NOT_AWAITING_PAYMENT");
+
+    if (string.Equals(order.ShippingMode, "UNSELECTED", StringComparison.OrdinalIgnoreCase))
+      throw new InvalidOperationException("AUCTION_SHIPPING_CHOICE_REQUIRED");
 
     if (order.PaymentDueAt is not null && now > order.PaymentDueAt.Value)
       throw new InvalidOperationException("Payment window expired.");

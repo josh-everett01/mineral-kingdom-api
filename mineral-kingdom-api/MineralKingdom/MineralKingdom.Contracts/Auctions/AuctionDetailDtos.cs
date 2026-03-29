@@ -18,6 +18,7 @@ public sealed record AuctionDetailDto(
   bool? ReserveMet,
   DateTimeOffset ClosingTimeUtc,
   int MinimumNextBidCents,
+  int? QuotedShippingCents,
   IReadOnlyList<AuctionDetailMediaDto> Media,
   bool? IsCurrentUserLeading,
   bool? HasCurrentUserBid,

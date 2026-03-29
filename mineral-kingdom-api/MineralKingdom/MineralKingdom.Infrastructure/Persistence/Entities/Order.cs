@@ -25,6 +25,15 @@ public sealed class Order
   public DateTimeOffset? PaymentDueAt { get; set; }
   // =======================================
 
+  // ===== S15-7: Auction shipping choice snapshot =====
+  // UNSELECTED / SHIP_NOW / OPEN_BOX
+  public string ShippingMode { get; set; } = "UNSELECTED";
+
+  // Final shipping amount snapshot used for payment/order totals.
+  // For OPEN_BOX this remains 0 at item-payment time.
+  public int ShippingAmountCents { get; set; }
+  // =======================================
+
   // Payment-confirmed snapshot
   public string Status { get; set; } = "DRAFT"; // DRAFT, AWAITING_PAYMENT, PAID
   public DateTimeOffset? PaidAt { get; set; }

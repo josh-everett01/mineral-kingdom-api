@@ -156,4 +156,115 @@ public sealed class OrderPaymentsStartGuardsTests : IClassFixture<PostgresContai
       afterCount.Should().Be(beforeCount);
     }
   }
+
+  [Fact]
+  public async Task Start_payment_for_awaiting_payment_auction_order_with_unselected_shipping_choice_returns_409_and_does_not_create_new_payment()
+  {
+    await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
+    await MigrateAsync(factory);
+    using var client = factory.CreateClient();
+
+    Guid orderId;
+    string accessToken;
+    var now = DateTimeOffset.UtcNow;
+    var utc = DateTime.UtcNow;
+
+    await using (var scope = factory.Services.CreateAsyncScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+      var hasher = scope.ServiceProvider.GetRequiredService<PasswordHasher<User>>();
+      var jwt = scope.ServiceProvider.GetRequiredService<JwtTokenService>();
+
+      var user = new User
+      {
+        Id = Guid.NewGuid(),
+        Email = "awaiting_shipping_choice@example.com",
+        EmailVerified = true,
+        Role = UserRoles.User,
+        CreatedAt = utc,
+        UpdatedAt = utc
+      };
+      user.PasswordHash = hasher.HashPassword(user, "Str0ngPass!123");
+      db.Users.Add(user);
+
+      var auction = new Auction
+      {
+        Id = Guid.NewGuid(),
+        ListingId = Guid.NewGuid(),
+        Status = "CLOSED_WAITING_ON_PAYMENT",
+        StartingPriceCents = 1000,
+        CurrentPriceCents = 1300,
+        BidCount = 1,
+        ReserveMet = true,
+        QuotedShippingCents = 250,
+        CloseTime = now.AddMinutes(-20),
+        ClosingWindowEnd = now.AddMinutes(-10),
+        CurrentLeaderUserId = user.Id,
+        CurrentLeaderMaxCents = 1300,
+        CreatedAt = now,
+        UpdatedAt = now
+      };
+      db.Auctions.Add(auction);
+
+      var order = new Order
+      {
+        Id = Guid.NewGuid(),
+        UserId = user.Id,
+        SourceType = "AUCTION",
+        AuctionId = auction.Id,
+        Status = "AWAITING_PAYMENT",
+        PaymentDueAt = now.AddHours(12),
+        ShippingMode = AuctionShippingModes.Unselected,
+        ShippingAmountCents = 0,
+        PaidAt = null,
+        OrderNumber = "MK-TEST-SHIP-REQ-001",
+        CurrencyCode = "USD",
+        SubtotalCents = 1300,
+        DiscountTotalCents = 0,
+        TotalCents = 1300,
+        CreatedAt = now.AddMinutes(-2),
+        UpdatedAt = now.AddMinutes(-1),
+      };
+      db.Orders.Add(order);
+
+      await db.SaveChangesAsync();
+
+      orderId = order.Id;
+
+      var (token, _) = jwt.CreateAccessToken(user, utc);
+      accessToken = token;
+    }
+
+    client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+    await using (var scope = factory.Services.CreateAsyncScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+      var beforeCount = await db.OrderPayments.CountAsync(p => p.OrderId == orderId);
+
+      var req = new StartOrderPaymentRequest(
+        Provider: MineralKingdom.Contracts.Store.PaymentProviders.PayPal,
+        SuccessUrl: "https://example.com/success",
+        CancelUrl: "https://example.com/cancel"
+      );
+
+      var res = await client.PostAsJsonAsync($"/api/orders/{orderId}/payments/start", req);
+
+      res.StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+      var body = await res.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+      body.Should().NotBeNull();
+      body!["error"].Should().Be("AUCTION_SHIPPING_CHOICE_REQUIRED");
+
+      var afterCount = await db.OrderPayments.CountAsync(p => p.OrderId == orderId);
+      afterCount.Should().Be(beforeCount);
+    }
+  }
+
+  private static async Task MigrateAsync(TestAppFactory factory)
+  {
+    using var scope = factory.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+    await db.Database.MigrateAsync();
+  }
 }

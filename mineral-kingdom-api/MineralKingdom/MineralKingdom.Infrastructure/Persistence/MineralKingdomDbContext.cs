@@ -392,6 +392,7 @@ public class MineralKingdomDbContext : DbContext
 
             b.Property(x => x.StartingPriceCents).IsRequired();
             b.Property(x => x.ReservePriceCents);
+            b.Property(x => x.QuotedShippingCents);
             b.Property(x => x.StartTime);
             b.Property(x => x.CloseTime).IsRequired();
             b.Property(x => x.ClosingWindowEnd);
@@ -544,11 +545,20 @@ public class MineralKingdomDbContext : DbContext
             b.Property(x => x.AuctionId);
             b.Property(x => x.PaymentDueAt);
 
-            b.HasIndex(x => x.AuctionId)
-              .IsUnique()
-              .HasFilter("\"AuctionId\" IS NOT NULL")
-              .HasDatabaseName("UX_orders_AuctionId");
+            // S15-7 additions
+            b.Property(x => x.ShippingMode)
+            .IsRequired()
+            .HasMaxLength(20)
+            .HasDefaultValue("UNSELECTED");
 
+            b.Property(x => x.ShippingAmountCents)
+            .IsRequired()
+            .HasDefaultValue(0);
+
+            b.HasIndex(x => x.AuctionId)
+            .IsUnique()
+            .HasFilter("\"AuctionId\" IS NOT NULL")
+            .HasDatabaseName("UX_orders_AuctionId");
         });
 
         modelBuilder.Entity<OrderLine>(b =>

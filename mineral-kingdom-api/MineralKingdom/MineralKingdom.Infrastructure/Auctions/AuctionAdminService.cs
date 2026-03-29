@@ -20,6 +20,8 @@ public sealed class AuctionAdminService
     if (req.StartingPriceCents <= 0) return (false, "INVALID_STARTING_PRICE", null);
     if (req.ReservePriceCents is not null && req.ReservePriceCents < req.StartingPriceCents)
       return (false, "INVALID_RESERVE_PRICE", null);
+    if (req.QuotedShippingCents is not null && req.QuotedShippingCents < 0)
+      return (false, "INVALID_QUOTED_SHIPPING", null);
 
     // Ensure listing exists
     var listing = await _db.Listings
@@ -51,6 +53,7 @@ public sealed class AuctionAdminService
 
       StartingPriceCents = req.StartingPriceCents,
       ReservePriceCents = req.ReservePriceCents,
+      QuotedShippingCents = req.QuotedShippingCents,
 
       StartTime = null,
       CloseTime = req.CloseTime,
@@ -67,8 +70,8 @@ public sealed class AuctionAdminService
       CreatedAt = now,
       UpdatedAt = now
     };
-    if (req.CloseTime <= now) return (false, "CLOSE_TIME_IN_PAST", null);
 
+    if (req.CloseTime <= now) return (false, "CLOSE_TIME_IN_PAST", null);
 
     _db.Auctions.Add(auction);
 
@@ -110,12 +113,10 @@ public sealed class AuctionAdminService
     auction.ReserveMet = false;
     auction.ClosingWindowEnd = null;
 
-
     var from = auction.Status;
     auction.Status = AuctionStatuses.Live;
     auction.StartTime = now;
     auction.UpdatedAt = now;
-
 
     _db.AuctionBidEvents.Add(new AuctionBidEvent
     {

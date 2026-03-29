@@ -34,6 +34,7 @@ public sealed class AuctionDetailService
         auction.BidCount,
         auction.ReservePriceCents,
         auction.ReserveMet,
+        auction.QuotedShippingCents,
         auction.CurrentLeaderUserId,
         auction.CurrentLeaderMaxCents,
         ClosingTimeUtc = auction.ClosingWindowEnd ?? auction.CloseTime
@@ -212,6 +213,7 @@ public sealed class AuctionDetailService
       reserveMet,
       row.ClosingTimeUtc,
       minimumNextBidCents,
+      row.QuotedShippingCents,
       media,
       isCurrentUserLeading,
       hasCurrentUserBid,

@@ -72,7 +72,7 @@ public sealed class OrderSseTests : IClassFixture<PostgresContainerFixture>
   }
 
   [Fact]
-  public async Task Order_sse_emits_initial_snapshot_for_owner()
+  public async Task Order_sse_emits_initial_snapshot_for_owner_with_richer_payload()
   {
     await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
 
@@ -91,15 +91,32 @@ public sealed class OrderSseTests : IClassFixture<PostgresContainerFixture>
         UserId = ownerId,
         OrderNumber = "ORDER-SSE-2",
         SourceType = "AUCTION",
+        AuctionId = Guid.NewGuid(),
         Status = "READY_TO_FULFILL",
         PaidAt = now,
+        PaymentDueAt = now.AddHours(12),
+        FulfillmentGroupId = null,
         TotalCents = 4321,
         CurrencyCode = "USD",
         CreatedAt = now,
         UpdatedAt = now
       };
 
+      var payment = new OrderPayment
+      {
+        Id = Guid.NewGuid(),
+        OrderId = order.Id,
+        Provider = "STRIPE",
+        Status = "SUCCEEDED",
+        ProviderCheckoutId = "sess_test_123",
+        ProviderPaymentId = "pi_test_123",
+        CreatedAt = now,
+        UpdatedAt = now
+      };
+
       db.Orders.Add(order);
+      db.OrderPayments.Add(payment);
+
       await db.SaveChangesAsync();
       orderId = order.Id;
     }
@@ -118,7 +135,7 @@ public sealed class OrderSseTests : IClassFixture<PostgresContainerFixture>
     await using var stream = await res.Content.ReadAsStreamAsync();
 
     var sb = new StringBuilder();
-    var buffer = new byte[1024];
+    var buffer = new byte[2048];
     using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
 
     while (!timeoutCts.IsCancellationRequested)
@@ -127,12 +144,27 @@ public sealed class OrderSseTests : IClassFixture<PostgresContainerFixture>
       if (n <= 0) break;
 
       sb.Append(Encoding.UTF8.GetString(buffer, 0, n));
-      if (sb.ToString().Contains("data:", StringComparison.OrdinalIgnoreCase))
+
+      var text = sb.ToString();
+      if (text.Contains("event: snapshot", StringComparison.OrdinalIgnoreCase) &&
+          text.Contains("data:", StringComparison.OrdinalIgnoreCase))
+      {
         break;
+      }
     }
 
     var all = sb.ToString();
+
     all.Should().Contain("event: snapshot");
     all.Should().Contain(orderId.ToString());
+    all.Should().Contain("ORDER-SSE-2");
+    all.Should().Contain("READY_TO_FULFILL");
+    all.Should().Contain("STRIPE");
+    all.Should().Contain("SUCCEEDED");
+    all.Should().Contain("USD");
+    all.Should().Contain("4321");
+
+    // NewTimelineEntries is intentionally null for now in the publisher.
+    all.Should().Contain("NewTimelineEntries");
   }
 }

@@ -12,13 +12,17 @@ namespace MineralKingdom.Infrastructure.Orders;
 public sealed class OrderService
 {
   private readonly MineralKingdomDbContext _db;
-
   private readonly EmailOutboxService _emails;
+  private readonly OrderSnapshotService _orderSnapshots;
 
-  public OrderService(MineralKingdomDbContext db, EmailOutboxService emails)
+  public OrderService(
+    MineralKingdomDbContext db,
+    EmailOutboxService emails,
+    OrderSnapshotService orderSnapshots)
   {
     _db = db;
     _emails = emails;
+    _orderSnapshots = orderSnapshots;
   }
 
   public sealed record CreateLine(Guid OfferId, int Quantity);
@@ -36,7 +40,6 @@ public sealed class OrderService
 
     var now = DateTimeOffset.UtcNow;
 
-    // load offers
     var offerIds = lines.Select(x => x.OfferId).Distinct().ToList();
 
     var offers = await _db.StoreOffers
@@ -47,7 +50,6 @@ public sealed class OrderService
     if (offers.Count != offerIds.Count)
       return (false, "OFFER_NOT_FOUND", null);
 
-    // Create order
     var order = new Order
     {
       Id = Guid.NewGuid(),
@@ -71,15 +73,10 @@ public sealed class OrderService
       if (!StoreOfferService.IsOfferCurrentlyValid(offer, now))
         return (false, "OFFER_NOT_ACTIVE", null);
 
-      // Snapshot pricing
       var unitPrice = offer.PriceCents;
       var unitDiscountRaw = StoreOfferService.ComputeUnitDiscountCents(offer);
-
-      // Clamp: discount can’t exceed unit price and can’t go below 0
       var unitDiscount = Math.Clamp(unitDiscountRaw, 0, unitPrice);
-
-      var unitFinal = unitPrice - unitDiscount; // guaranteed >= 0
-
+      var unitFinal = unitPrice - unitDiscount;
 
       var qty = reqLine.Quantity;
 
@@ -87,25 +84,19 @@ public sealed class OrderService
       var lineDiscount = checked((int)((long)unitDiscount * qty));
       var lineTotal = checked((int)((long)unitFinal * qty));
 
-
-      // Pull listingId from offer target (for future display/shipping)
       var line = new OrderLine
       {
         Id = Guid.NewGuid(),
         OrderId = order.Id,
         OfferId = offer.Id,
         ListingId = offer.ListingId,
-
         UnitPriceCents = unitPrice,
         UnitDiscountCents = unitDiscount,
         UnitFinalPriceCents = unitFinal,
-
         Quantity = qty,
-
         LineSubtotalCents = lineSubtotal,
         LineDiscountCents = lineDiscount,
         LineTotalCents = lineTotal,
-
         CreatedAt = now,
         UpdatedAt = now
       };
@@ -123,7 +114,10 @@ public sealed class OrderService
     return (true, null, order);
   }
 
-  public async Task<(bool Ok, string? Error, Order? Order)> GetAsync(Guid orderId, Guid userId, CancellationToken ct)
+  public async Task<(bool Ok, string? Error, Order? Order)> GetAsync(
+    Guid orderId,
+    Guid userId,
+    CancellationToken ct)
   {
     var order = await _db.Orders
       .Include(o => o.Lines)
@@ -135,59 +129,21 @@ public sealed class OrderService
     return (true, null, order);
   }
 
-  public async Task<OrderDto?> GetGuestOrderAsync(string orderNumber, string email, CancellationToken ct)
+  public async Task<OrderDto?> GetGuestOrderAsync(
+    string orderNumber,
+    string email,
+    CancellationToken ct)
   {
-    var order = await _db.Orders.AsNoTracking()
-      .Include(o => o.Lines)
-      .SingleOrDefaultAsync(o =>
-        o.OrderNumber == orderNumber &&
-        o.GuestEmail == email,
-        ct);
+    var orderId = await _db.Orders
+      .AsNoTracking()
+      .Where(o => o.OrderNumber == orderNumber && o.GuestEmail == email)
+      .Select(o => (Guid?)o.Id)
+      .SingleOrDefaultAsync(ct);
 
-    if (order is null) return null;
+    if (orderId is null)
+      return null;
 
-    var latestPayment = await _db.OrderPayments.AsNoTracking()
-  .Where(p => p.OrderId == order.Id)
-  .OrderByDescending(p => p.CreatedAt)
-  .ThenByDescending(p => p.Id)
-  .Select(p => new
-  {
-    p.Status,
-    p.Provider
-  })
-  .FirstOrDefaultAsync(ct);
-
-    return new OrderDto(
-      order.Id,
-      order.UserId,
-      order.OrderNumber,
-      order.SourceType,
-      order.AuctionId,
-      order.PaymentDueAt,
-      order.SubtotalCents,
-      order.DiscountTotalCents,
-      order.TotalCents,
-      order.CurrencyCode,
-      order.Status,
-      latestPayment?.Status,
-      latestPayment?.Provider,
-      order.PaidAt,
-      order.Lines
-        .OrderBy(l => l.CreatedAt)
-        .Select(l => new OrderLineDto(
-          l.Id,
-          l.OfferId,
-          l.ListingId,
-          l.UnitPriceCents,
-          l.UnitDiscountCents,
-          l.UnitFinalPriceCents,
-          l.Quantity,
-          l.LineSubtotalCents,
-          l.LineDiscountCents,
-          l.LineTotalCents
-        ))
-        .ToList()
-    );
+    return await _orderSnapshots.GetOrderAsync(orderId.Value, ct);
   }
 
   private static string GenerateOrderNumber(DateTimeOffset now)
@@ -198,13 +154,13 @@ public sealed class OrderService
   }
 
   public async Task<(bool Ok, string? Error)> AdminExtendAuctionPaymentDueAsync(
-  Guid orderId,
-  DateTimeOffset newDueAt,
-  Guid actorUserId,
-  DateTimeOffset now,
-  string? ipAddress,
-  string? userAgent,
-  CancellationToken ct)
+    Guid orderId,
+    DateTimeOffset newDueAt,
+    Guid actorUserId,
+    DateTimeOffset now,
+    string? ipAddress,
+    string? userAgent,
+    CancellationToken ct)
   {
     var order = await _db.Orders.SingleOrDefaultAsync(o => o.Id == orderId, ct);
     if (order is null) return (false, "ORDER_NOT_FOUND");
@@ -217,21 +173,14 @@ public sealed class OrderService
 
     if (order.PaymentDueAt is null) return (false, "PAYMENT_DUE_MISSING");
 
-    // Defensive request validation (since DateTimeOffset can't be null)
     if (newDueAt == default) return (false, "PAYMENT_DUE_REQUIRED");
-
-    // Must be in the future (prevents setting into the past)
     if (newDueAt <= now) return (false, "PAYMENT_DUE_MUST_BE_IN_FUTURE");
 
     var oldDue = order.PaymentDueAt.Value;
 
-    // Must be an extension (or allow same value as idempotent)
     if (newDueAt < oldDue) return (false, "PAYMENT_DUE_CANNOT_DECREASE");
-
-    // No-op idempotency
     if (newDueAt == oldDue) return (true, null);
 
-    // Optional guardrail: cap final due date (not required by story, but safe)
     var maxDue = now.AddDays(30);
     if (newDueAt > maxDue) return (false, "PAYMENT_DUE_TOO_FAR_IN_FUTURE");
 
@@ -241,21 +190,15 @@ public sealed class OrderService
     _db.AdminAuditLogs.Add(new AdminAuditLog
     {
       Id = Guid.NewGuid(),
-
       ActorUserId = actorUserId,
       ActorRole = UserRoles.Owner,
-
       ActionType = "ORDER_PAYMENT_DUE_EXTENDED",
-
       EntityType = "ORDER",
       EntityId = order.Id,
-
       BeforeJson = $"{{\"paymentDueAt\":\"{oldDue:O}\"}}",
       AfterJson = $"{{\"paymentDueAt\":\"{newDueAt:O}\"}}",
-
       IpAddress = ipAddress,
       UserAgent = userAgent,
-
       CreatedAt = now
     });
 
@@ -264,26 +207,23 @@ public sealed class OrderService
   }
 
   public async Task<(bool Ok, string? Error)> ConfirmPaidOrderFromWebhookAsync(
-      Guid orderId,
-      string paymentReference,
-      DateTimeOffset now,
-      CancellationToken ct)
+    Guid orderId,
+    string paymentReference,
+    DateTimeOffset now,
+    CancellationToken ct)
   {
     await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
-    // Lock row to ensure consistent idempotency under retries
     var order = await _db.Orders
       .FromSqlInterpolated($@"SELECT * FROM orders WHERE ""Id"" = {orderId} FOR UPDATE")
       .SingleOrDefaultAsync(ct);
 
     if (order is null) return (false, "ORDER_NOT_FOUND");
 
-    // Idempotency: already paid
     if (string.Equals(order.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase))
     {
       await tx.CommitAsync(ct);
 
-      // S6-4: Payment received email (mandatory) - enqueue after commit
       try
       {
         string? toEmail = null;
@@ -314,20 +254,21 @@ public sealed class OrderService
             ct: ct);
         }
       }
-      catch { /* best-effort */ }
+      catch
+      {
+        // best-effort
+      }
+
       return (true, null);
     }
 
-    // Must be awaiting payment
     if (!string.Equals(order.Status, "AWAITING_PAYMENT", StringComparison.OrdinalIgnoreCase))
       return (false, "ORDER_NOT_AWAITING_PAYMENT");
 
-    // Mark order paid/ready
     order.Status = "READY_TO_FULFILL";
     order.PaidAt = now;
     order.UpdatedAt = now;
 
-    // If this is an auction order, mark auction CLOSED_PAID as well
     if (string.Equals(order.SourceType, "AUCTION", StringComparison.OrdinalIgnoreCase) && order.AuctionId.HasValue)
     {
       var auction = await _db.Auctions
@@ -346,5 +287,4 @@ public sealed class OrderService
     await tx.CommitAsync(ct);
     return (true, null);
   }
-
 }

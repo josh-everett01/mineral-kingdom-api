@@ -39,16 +39,12 @@ public sealed class OpenBoxShippingInvoiceController : ControllerBase
 
     if (inv is null) return NotFound(new { error = "INVOICE_NOT_FOUND" });
 
-    return Ok(new
-    {
-      shippingInvoiceId = inv.Id,
-      fulfillmentGroupId = group.Id,
-      amountCents = inv.AmountCents,
-      currencyCode = inv.CurrencyCode,
-      status = inv.Status,
-      provider = inv.Provider,
-      providerCheckoutId = inv.ProviderCheckoutId
-    });
+    var (ok, err, detail) = await _payments.GetInvoiceDetailForUserAsync(userId, inv.Id, ct);
+
+    if (!ok || detail is null)
+      return NotFound(new { error = err ?? "INVOICE_NOT_FOUND" });
+
+    return Ok(detail);
   }
 
   [HttpPost("pay")]

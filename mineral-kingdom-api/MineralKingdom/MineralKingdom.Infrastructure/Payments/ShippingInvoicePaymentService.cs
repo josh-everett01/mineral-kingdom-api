@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using MineralKingdom.Contracts.Listings;
 using MineralKingdom.Contracts.Orders;
 using MineralKingdom.Infrastructure.Persistence;
 
@@ -59,5 +60,151 @@ public sealed class ShippingInvoicePaymentService
     await _db.SaveChangesAsync(ct);
 
     return (true, null, redirect);
+  }
+
+  public async Task<(bool Ok, string? Error, ShippingInvoiceDetailDto? Detail)> GetInvoiceDetailForUserAsync(
+  Guid userId,
+  Guid invoiceId,
+  CancellationToken ct)
+  {
+    var row = await (
+      from inv in _db.ShippingInvoices.AsNoTracking()
+      join grp in _db.FulfillmentGroups.AsNoTracking()
+        on inv.FulfillmentGroupId equals grp.Id
+      where inv.Id == invoiceId && grp.UserId == userId
+      select new
+      {
+        inv.Id,
+        inv.FulfillmentGroupId,
+        inv.AmountCents,
+        inv.CurrencyCode,
+        inv.Status,
+        inv.Provider,
+        inv.ProviderCheckoutId,
+        inv.PaidAt,
+        inv.CreatedAt,
+        inv.UpdatedAt
+      }
+    ).SingleOrDefaultAsync(ct);
+
+    if (row is null)
+      return (false, "INVOICE_NOT_FOUND", null);
+
+    var orderRows = await _db.Orders.AsNoTracking()
+      .Where(o => o.UserId == userId && o.FulfillmentGroupId == row.FulfillmentGroupId)
+      .OrderBy(o => o.CreatedAt)
+      .Select(o => new
+      {
+        o.Id,
+        o.OrderNumber,
+        o.SourceType,
+        o.CreatedAt
+      })
+      .ToListAsync(ct);
+
+    var orderIds = orderRows.Select(x => x.Id).ToList();
+
+    var itemRows = await (
+      from line in _db.OrderLines.AsNoTracking()
+      join listing in _db.Listings.AsNoTracking()
+        on line.ListingId equals listing.Id
+      join mineral in _db.Minerals.AsNoTracking()
+        on listing.PrimaryMineralId equals mineral.Id into mineralJoin
+      from mineral in mineralJoin.DefaultIfEmpty()
+      where orderIds.Contains(line.OrderId)
+      orderby line.CreatedAt
+      select new
+      {
+        line.OrderId,
+        line.Quantity,
+        listing.Id,
+        listing.Title,
+        listing.LocalityDisplay,
+        MineralName = mineral != null ? mineral.Name : null
+      }
+    ).ToListAsync(ct);
+
+    var listingIds = itemRows.Select(x => x.Id).Distinct().ToList();
+
+    var mediaRows = await _db.ListingMedia.AsNoTracking()
+      .Where(m =>
+        listingIds.Contains(m.ListingId) &&
+        m.Status == ListingMediaStatuses.Ready &&
+        m.DeletedAt == null)
+      .OrderByDescending(m => m.IsPrimary)
+      .ThenBy(m => m.SortOrder)
+      .Select(m => new
+      {
+        m.ListingId,
+        m.Url
+      })
+      .ToListAsync(ct);
+
+    var primaryImageByListingId = mediaRows
+      .GroupBy(x => x.ListingId)
+      .ToDictionary(g => g.Key, g => g.First().Url);
+
+    var orderById = orderRows.ToDictionary(x => x.Id, x => x);
+
+    var items = itemRows
+      .Select(x =>
+      {
+        primaryImageByListingId.TryGetValue(x.Id, out var imageUrl);
+        orderById.TryGetValue(x.OrderId, out var order);
+
+        return new ShippingInvoiceDetailItemDto(
+          OrderId: x.OrderId,
+          OrderNumber: order?.OrderNumber,
+          SourceType: order?.SourceType,
+          ListingId: x.Id,
+          ListingSlug: null,
+          Title: x.Title,
+          PrimaryImageUrl: imageUrl,
+          MineralName: x.MineralName,
+          Locality: x.LocalityDisplay,
+          Quantity: x.Quantity
+        );
+      })
+      .ToList();
+
+    var relatedOrders = orderRows
+      .Select(x => new ShippingInvoiceDetailRelatedOrderDto(
+        x.Id,
+        x.OrderNumber,
+        x.SourceType))
+      .ToList();
+
+    var firstItem = items.FirstOrDefault();
+
+    var itemCount = items.Sum(x => x.Quantity);
+
+    var auctionOrderCount = relatedOrders.Count(x =>
+      string.Equals(x.SourceType, "AUCTION", StringComparison.OrdinalIgnoreCase));
+
+    var storeOrderCount = relatedOrders.Count(x =>
+      string.Equals(x.SourceType, "STORE", StringComparison.OrdinalIgnoreCase));
+
+    var detail = new ShippingInvoiceDetailDto(
+      ShippingInvoiceId: row.Id,
+      FulfillmentGroupId: row.FulfillmentGroupId,
+      AmountCents: row.AmountCents,
+      CurrencyCode: row.CurrencyCode,
+      Status: row.Status,
+      Provider: row.Provider,
+      ProviderCheckoutId: row.ProviderCheckoutId,
+      PaidAt: row.PaidAt,
+      DueAt: null,
+      CreatedAt: row.CreatedAt,
+      UpdatedAt: row.UpdatedAt,
+      ItemCount: itemCount,
+      PreviewTitle: firstItem?.Title,
+      PreviewImageUrl: firstItem?.PrimaryImageUrl,
+      AuctionOrderCount: auctionOrderCount,
+      StoreOrderCount: storeOrderCount,
+      RelatedOrders: relatedOrders,
+      Items: items
+    );
+
+    return (true, null, detail);
   }
 }

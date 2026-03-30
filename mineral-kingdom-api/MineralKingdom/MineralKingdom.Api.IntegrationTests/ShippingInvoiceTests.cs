@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using MineralKingdom.Api.Security;
 using MineralKingdom.Contracts.Auth;
+using MineralKingdom.Contracts.Listings;
 using MineralKingdom.Contracts.Orders;
 using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Persistence;
@@ -380,5 +381,156 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
       new AdminMarkShippedRequest { ShippingCarrier = "USPS", TrackingNumber = "OK" });
 
     ship.StatusCode.Should().Be(HttpStatusCode.NoContent);
+  }
+
+  [Fact]
+  public async Task Current_shipping_invoice_detail_includes_related_orders_items_and_preview_context()
+  {
+    await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
+
+    var userId = Guid.NewGuid();
+    var now = DateTimeOffset.UtcNow;
+
+    await using (var scope = factory.Services.CreateAsyncScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var mineralId = Guid.NewGuid();
+      var listingId = Guid.NewGuid();
+      var orderId = Guid.NewGuid();
+      var groupId = Guid.NewGuid();
+      var invoiceId = Guid.NewGuid();
+
+      db.Users.Add(new User
+      {
+        Id = userId,
+        Email = "ship_invoice_detail@example.com",
+        EmailVerified = true,
+        Role = UserRoles.User,
+        CreatedAt = now.UtcDateTime,
+        UpdatedAt = now.UtcDateTime
+      });
+
+      db.Minerals.Add(new Mineral
+      {
+        Id = mineralId,
+        Name = "Quartz",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.Listings.Add(new Listing
+      {
+        Id = listingId,
+        Title = "Quartz Cluster",
+        Description = "Open Box item",
+        Status = "PUBLISHED",
+        PrimaryMineralId = mineralId,
+        LocalityDisplay = "Arkansas, USA",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.ListingMedia.Add(new ListingMedia
+      {
+        Id = Guid.NewGuid(),
+        ListingId = listingId,
+        Url = "https://cdn.example.com/quartz.jpg",
+        Status = ListingMediaStatuses.Ready,
+        MediaType = "IMAGE",
+        IsPrimary = true,
+        SortOrder = 0,
+        ContentLengthBytes = 123,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.FulfillmentGroups.Add(new FulfillmentGroup
+      {
+        Id = groupId,
+        UserId = userId,
+        Status = "READY_TO_FULFILL",
+        BoxStatus = "CLOSED",
+        ClosedAt = now,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.Orders.Add(new Order
+      {
+        Id = orderId,
+        UserId = userId,
+        OrderNumber = "MK-20260331-SHIP01",
+        SourceType = "AUCTION",
+        Status = "READY_TO_FULFILL",
+        PaidAt = now,
+        CurrencyCode = "USD",
+        SubtotalCents = 11000,
+        DiscountTotalCents = 0,
+        TotalCents = 11000,
+        FulfillmentGroupId = groupId,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.OrderLines.Add(new OrderLine
+      {
+        Id = Guid.NewGuid(),
+        OrderId = orderId,
+        OfferId = null,
+        ListingId = listingId,
+        Quantity = 1,
+        UnitPriceCents = 11000,
+        UnitDiscountCents = 0,
+        UnitFinalPriceCents = 11000,
+        LineSubtotalCents = 11000,
+        LineDiscountCents = 0,
+        LineTotalCents = 11000,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.ShippingInvoices.Add(new ShippingInvoice
+      {
+        Id = invoiceId,
+        FulfillmentGroupId = groupId,
+        AmountCents = 599,
+        CalculatedAmountCents = 599,
+        CurrencyCode = "USD",
+        Status = "UNPAID",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      await db.SaveChangesAsync();
+    }
+
+    using var client = factory.CreateClient();
+    AsUser(client, userId, UserRoles.User);
+
+    var res = await client.GetAsync("/api/me/open-box/shipping-invoice");
+    res.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    var dto = await res.Content.ReadFromJsonAsync<ShippingInvoiceDetailDto>();
+    dto.Should().NotBeNull();
+
+    dto!.AmountCents.Should().Be(599);
+    dto.Status.Should().Be("UNPAID");
+    dto.ItemCount.Should().Be(1);
+    dto.PreviewTitle.Should().Be("Quartz Cluster");
+    dto.PreviewImageUrl.Should().Be("https://cdn.example.com/quartz.jpg");
+
+    dto.RelatedOrders.Should().HaveCount(1);
+    dto.RelatedOrders[0].OrderNumber.Should().Be("MK-20260331-SHIP01");
+    dto.RelatedOrders[0].SourceType.Should().Be("AUCTION");
+
+    dto.Items.Should().HaveCount(1);
+    dto.Items[0].Title.Should().Be("Quartz Cluster");
+    dto.Items[0].OrderNumber.Should().Be("MK-20260331-SHIP01");
+    dto.Items[0].SourceType.Should().Be("AUCTION");
+    dto.Items[0].PrimaryImageUrl.Should().Be("https://cdn.example.com/quartz.jpg");
+    dto.Items[0].MineralName.Should().Be("Quartz");
+    dto.Items[0].Locality.Should().Be("Arkansas, USA");
+    dto.Items[0].Quantity.Should().Be(1);
   }
 }

@@ -9,4 +9,8 @@ public sealed record DashboardOrderSummaryDto(
   string CurrencyCode,
   DateTimeOffset CreatedAt,
   DateTimeOffset? PaymentDueAt,
-  Guid? FulfillmentGroupId);
+  Guid? FulfillmentGroupId,
+  string? ShippingMode,
+  int ItemCount,
+  string? PreviewTitle,
+  string? PreviewImageUrl);

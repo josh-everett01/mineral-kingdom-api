@@ -288,6 +288,12 @@ public sealed class DashboardTests : IClassFixture<PostgresContainerFixture>
     dto.OpenBox.Orders.Select(o => o.OrderId).Should().Contain(orderA_paid);
 
     dto.ShippingInvoices.Select(i => i.ShippingInvoiceId).Should().Contain(invA).And.NotContain(invB);
+
+    dto.ShippingInvoices.Single(i => i.ShippingInvoiceId == invA).RelatedOrders
+  .Select(x => x.OrderId)
+  .Should()
+  .Contain(orderA_paid)
+  .And.NotContain(orderB_paid);
   }
 
   [Fact]
@@ -523,5 +529,287 @@ public sealed class DashboardTests : IClassFixture<PostgresContainerFixture>
     dto!.PaidOrders.Count.Should().Be(20);
     dto.UnpaidAuctionOrders.Count.Should().Be(20);
     dto.WonAuctions.Count.Should().Be(20);
+  }
+
+  [Fact]
+  public async Task Dashboard_includes_shipping_mode_for_unpaid_auction_orders()
+  {
+    await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
+
+    var userId = Guid.NewGuid();
+    var now = DateTimeOffset.UtcNow;
+
+    await using (var scope = factory.Services.CreateAsyncScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      db.Users.Add(new User
+      {
+        Id = userId,
+        Email = "dash_shipping_modes@example.com",
+        EmailVerified = true,
+        Role = UserRoles.User,
+        CreatedAt = DateTime.UtcNow,
+        UpdatedAt = DateTime.UtcNow
+      });
+
+      db.Orders.AddRange(
+        new Order
+        {
+          Id = Guid.NewGuid(),
+          UserId = userId,
+          GuestEmail = null,
+          OrderNumber = $"MK-SM1-{Guid.NewGuid():N}"[..18],
+          SourceType = "AUCTION",
+          Status = "AWAITING_PAYMENT",
+          PaymentDueAt = now.AddHours(6),
+          ShippingMode = "UNSELECTED",
+          ShippingAmountCents = 0,
+          CurrencyCode = "USD",
+          SubtotalCents = 1000,
+          DiscountTotalCents = 0,
+          TotalCents = 1000,
+          CreatedAt = now.AddMinutes(-3),
+          UpdatedAt = now.AddMinutes(-3)
+        },
+        new Order
+        {
+          Id = Guid.NewGuid(),
+          UserId = userId,
+          GuestEmail = null,
+          OrderNumber = $"MK-SM2-{Guid.NewGuid():N}"[..18],
+          SourceType = "AUCTION",
+          Status = "AWAITING_PAYMENT",
+          PaymentDueAt = now.AddHours(7),
+          ShippingMode = "SHIP_NOW",
+          ShippingAmountCents = 2500,
+          CurrencyCode = "USD",
+          SubtotalCents = 1100,
+          DiscountTotalCents = 0,
+          TotalCents = 3600,
+          CreatedAt = now.AddMinutes(-2),
+          UpdatedAt = now.AddMinutes(-2)
+        },
+        new Order
+        {
+          Id = Guid.NewGuid(),
+          UserId = userId,
+          GuestEmail = null,
+          OrderNumber = $"MK-SM3-{Guid.NewGuid():N}"[..18],
+          SourceType = "AUCTION",
+          Status = "AWAITING_PAYMENT",
+          PaymentDueAt = now.AddHours(8),
+          ShippingMode = "OPEN_BOX",
+          ShippingAmountCents = 0,
+          CurrencyCode = "USD",
+          SubtotalCents = 1750,
+          DiscountTotalCents = 0,
+          TotalCents = 1750,
+          CreatedAt = now.AddMinutes(-1),
+          UpdatedAt = now.AddMinutes(-1)
+        });
+
+      await db.SaveChangesAsync();
+    }
+
+    using var client = factory.CreateClient();
+    AsUser(client, userId);
+
+    var dto = await client.GetFromJsonAsync<DashboardDto>("/api/me/dashboard");
+    dto.Should().NotBeNull();
+
+    dto!.UnpaidAuctionOrders.Should().HaveCount(3);
+    dto.UnpaidAuctionOrders.Should().Contain(x =>
+      x.ShippingMode == "UNSELECTED" && x.TotalCents == 1000);
+    dto.UnpaidAuctionOrders.Should().Contain(x =>
+      x.ShippingMode == "SHIP_NOW" && x.TotalCents == 3600);
+    dto.UnpaidAuctionOrders.Should().Contain(x =>
+      x.ShippingMode == "OPEN_BOX" && x.TotalCents == 1750);
+  }
+
+  [Fact]
+  public async Task Dashboard_shipping_invoice_includes_related_orders_item_count_and_preview_context()
+  {
+    await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
+
+    var userId = Guid.NewGuid();
+    var now = DateTimeOffset.UtcNow;
+
+    var fulfillmentGroupId = Guid.NewGuid();
+    var shippingInvoiceId = Guid.NewGuid();
+
+    var auctionListingId = Guid.NewGuid();
+    var storeListingId = Guid.NewGuid();
+
+    var auctionOrderId = Guid.NewGuid();
+    var storeOrderId = Guid.NewGuid();
+
+    await using (var scope = factory.Services.CreateAsyncScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      db.Users.Add(new User
+      {
+        Id = userId,
+        Email = "dash_invoice_context@example.com",
+        EmailVerified = true,
+        Role = UserRoles.User,
+        CreatedAt = DateTime.UtcNow,
+        UpdatedAt = DateTime.UtcNow
+      });
+
+      db.FulfillmentGroups.Add(new FulfillmentGroup
+      {
+        Id = fulfillmentGroupId,
+        UserId = userId,
+        GuestEmail = null,
+        BoxStatus = "OPEN",
+        ClosedAt = null,
+        Status = "READY_TO_FULFILL",
+        CreatedAt = now.AddHours(-1),
+        UpdatedAt = now.AddMinutes(-1)
+      });
+
+      db.Listings.AddRange(
+        new Listing
+        {
+          Id = auctionListingId,
+          Title = "Fluorite Cube",
+          Description = "Auction listing",
+          Status = "PUBLISHED",
+          CreatedAt = now,
+          UpdatedAt = now
+        },
+        new Listing
+        {
+          Id = storeListingId,
+          Title = "Quartz Cluster",
+          Description = "Store listing",
+          Status = "PUBLISHED",
+          CreatedAt = now,
+          UpdatedAt = now
+        });
+
+      db.Orders.AddRange(
+        new Order
+        {
+          Id = auctionOrderId,
+          UserId = userId,
+          GuestEmail = null,
+          OrderNumber = "MK-DASH-AUCT-001",
+          SourceType = "AUCTION",
+          AuctionId = Guid.NewGuid(),
+          Status = "READY_TO_FULFILL",
+          PaymentDueAt = null,
+          ShippingMode = "OPEN_BOX",
+          ShippingAmountCents = 0,
+          CurrencyCode = "USD",
+          SubtotalCents = 1500,
+          DiscountTotalCents = 0,
+          TotalCents = 1500,
+          FulfillmentGroupId = fulfillmentGroupId,
+          CreatedAt = now.AddMinutes(-10),
+          UpdatedAt = now.AddMinutes(-10)
+        },
+        new Order
+        {
+          Id = storeOrderId,
+          UserId = userId,
+          GuestEmail = null,
+          OrderNumber = "MK-DASH-STORE-001",
+          SourceType = "STORE",
+          AuctionId = null,
+          Status = "READY_TO_FULFILL",
+          PaymentDueAt = null,
+          ShippingMode = "OPEN_BOX",
+          ShippingAmountCents = 0,
+          CurrencyCode = "USD",
+          SubtotalCents = 2200,
+          DiscountTotalCents = 0,
+          TotalCents = 2200,
+          FulfillmentGroupId = fulfillmentGroupId,
+          CreatedAt = now.AddMinutes(-9),
+          UpdatedAt = now.AddMinutes(-9)
+        });
+
+      db.OrderLines.AddRange(
+        new OrderLine
+        {
+          Id = Guid.NewGuid(),
+          OrderId = auctionOrderId,
+          OfferId = null,
+          ListingId = auctionListingId,
+          Quantity = 1,
+          UnitPriceCents = 1500,
+          UnitDiscountCents = 0,
+          UnitFinalPriceCents = 1500,
+          LineSubtotalCents = 1500,
+          LineDiscountCents = 0,
+          LineTotalCents = 1500,
+          CreatedAt = now.AddMinutes(-10),
+          UpdatedAt = now.AddMinutes(-10)
+        },
+        new OrderLine
+        {
+          Id = Guid.NewGuid(),
+          OrderId = storeOrderId,
+          OfferId = null,
+          ListingId = storeListingId,
+          Quantity = 2,
+          UnitPriceCents = 1100,
+          UnitDiscountCents = 0,
+          UnitFinalPriceCents = 1100,
+          LineSubtotalCents = 2200,
+          LineDiscountCents = 0,
+          LineTotalCents = 2200,
+          CreatedAt = now.AddMinutes(-9),
+          UpdatedAt = now.AddMinutes(-9)
+        });
+
+      db.ShippingInvoices.Add(new ShippingInvoice
+      {
+        Id = shippingInvoiceId,
+        FulfillmentGroupId = fulfillmentGroupId,
+        AmountCents = 4200,
+        CurrencyCode = "USD",
+        Status = "UNPAID",
+        Provider = null,
+        ProviderCheckoutId = null,
+        PaidAt = null,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      await db.SaveChangesAsync();
+    }
+
+    using var client = factory.CreateClient();
+    AsUser(client, userId);
+
+    var dto = await client.GetFromJsonAsync<DashboardDto>("/api/me/dashboard");
+    dto.Should().NotBeNull();
+
+    dto!.ShippingInvoices.Should().HaveCount(1);
+
+    var invoice = dto.ShippingInvoices.Single();
+    invoice.ShippingInvoiceId.Should().Be(shippingInvoiceId);
+    invoice.FulfillmentGroupId.Should().Be(fulfillmentGroupId);
+    invoice.AmountCents.Should().Be(4200);
+    invoice.Status.Should().Be("UNPAID");
+
+    invoice.ItemCount.Should().Be(3);
+    invoice.PreviewTitle.Should().Be("Fluorite Cube");
+    invoice.AuctionOrderCount.Should().Be(1);
+    invoice.StoreOrderCount.Should().Be(1);
+
+    invoice.RelatedOrders.Should().HaveCount(2);
+    invoice.RelatedOrders.Should().Contain(x =>
+      x.OrderId == auctionOrderId &&
+      x.OrderNumber == "MK-DASH-AUCT-001" &&
+      x.SourceType == "AUCTION");
+    invoice.RelatedOrders.Should().Contain(x =>
+      x.OrderId == storeOrderId &&
+      x.OrderNumber == "MK-DASH-STORE-001" &&
+      x.SourceType == "STORE");
   }
 }

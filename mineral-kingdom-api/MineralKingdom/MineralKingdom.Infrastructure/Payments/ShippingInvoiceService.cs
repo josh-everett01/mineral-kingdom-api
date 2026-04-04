@@ -13,12 +13,14 @@ public sealed class ShippingInvoiceService
 {
   private readonly MineralKingdomDbContext _db;
   private readonly ShippingOptions _opts;
-
   private readonly EmailOutboxService _emails;
-
   private readonly IShippingInvoiceRealtimePublisher _realtime;
 
-  public ShippingInvoiceService(MineralKingdomDbContext db, IOptions<ShippingOptions> opts, EmailOutboxService emails, IShippingInvoiceRealtimePublisher realtime)
+  public ShippingInvoiceService(
+    MineralKingdomDbContext db,
+    IOptions<ShippingOptions> opts,
+    EmailOutboxService emails,
+    IShippingInvoiceRealtimePublisher realtime)
   {
     _db = db;
     _opts = opts.Value ?? new ShippingOptions();
@@ -26,7 +28,7 @@ public sealed class ShippingInvoiceService
     _realtime = realtime;
   }
 
-  public async Task<(bool Ok, string? Error, ShippingInvoice? Invoice)> EnsureInvoiceForGroupAsync(
+  public async Task<(bool Ok, string? Error, ShippingInvoice? Invoice)> ResolveCurrentInvoiceForGroupAsync(
     Guid groupId,
     DateTimeOffset now,
     CancellationToken ct)
@@ -34,42 +36,74 @@ public sealed class ShippingInvoiceService
     var group = await _db.FulfillmentGroups.SingleOrDefaultAsync(g => g.Id == groupId, ct);
     if (group is null) return (false, "GROUP_NOT_FOUND", null);
 
-    // Only generate once the box is closed (Open Box behavior)
     if (!string.Equals(group.BoxStatus, "CLOSED", StringComparison.OrdinalIgnoreCase))
       return (false, "BOX_NOT_CLOSED", null);
 
-    // If an active unpaid invoice exists, return it (idempotent)
-    var existing = await _db.ShippingInvoices
-      .OrderByDescending(i => i.CreatedAt)
-      .FirstOrDefaultAsync(i => i.FulfillmentGroupId == groupId && i.Status == "UNPAID", ct);
+    var invoices = await _db.ShippingInvoices
+      .Where(i => i.FulfillmentGroupId == groupId)
+      .OrderBy(i => i.CreatedAt)
+      .ToListAsync(ct);
 
-    if (existing is not null) return (true, null, existing);
+    var paid = invoices
+      .Where(i => string.Equals(i.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+      .ToList();
 
-    // If paid invoice exists, no need to create another
-    var alreadyPaid = await _db.ShippingInvoices
-      .AnyAsync(i => i.FulfillmentGroupId == groupId && i.Status == "PAID", ct);
+    var unpaid = invoices
+      .Where(i => string.Equals(i.Status, "UNPAID", StringComparison.OrdinalIgnoreCase))
+      .ToList();
 
-    if (alreadyPaid)
+    var voided = invoices
+      .Where(i => string.Equals(i.Status, "VOID", StringComparison.OrdinalIgnoreCase))
+      .ToList();
+
+    if (paid.Count > 1)
+      return (false, "MULTIPLE_PAID_SHIPPING_INVOICES", null);
+
+    // If payment has already been completed for this fulfillment group,
+    // that paid invoice is the canonical invoice. Any remaining unpaid
+    // invoices are stale and must not remain actionable.
+    if (paid.Count == 1)
     {
-      var latest = await _db.ShippingInvoices
-        .OrderByDescending(i => i.CreatedAt)
-        .FirstAsync(i => i.FulfillmentGroupId == groupId, ct);
+      var canonicalPaid = paid[0];
 
-      return (true, null, latest);
+      var staleUnpaid = unpaid
+        .Where(i => i.Id != canonicalPaid.Id)
+        .ToList();
+
+      if (staleUnpaid.Count > 0)
+      {
+        foreach (var stale in staleUnpaid)
+        {
+          stale.Status = "VOID";
+          stale.UpdatedAt = now;
+        }
+
+        await _db.SaveChangesAsync(ct);
+      }
+
+      return (true, null, canonicalPaid);
     }
 
+    // If there are multiple unpaid invoices and no paid invoice,
+    // that is a real invariant violation. Do not guess by "latest."
+    if (unpaid.Count > 1)
+      return (false, "MULTIPLE_ACTIVE_SHIPPING_INVOICES", null);
+
+    if (unpaid.Count == 1)
+      return (true, null, unpaid[0]);
+
+    // No current invoice exists; create exactly one.
     var amount = await CalculateTierShippingCentsAsync(groupId, ct);
-    var currency = string.IsNullOrWhiteSpace(_opts.CurrencyCode) ? "USD" : _opts.CurrencyCode.Trim().ToUpperInvariant();
+    var currency = string.IsNullOrWhiteSpace(_opts.CurrencyCode)
+      ? "USD"
+      : _opts.CurrencyCode.Trim().ToUpperInvariant();
 
     var inv = new ShippingInvoice
     {
       Id = Guid.NewGuid(),
       FulfillmentGroupId = groupId,
 
-      // Snapshot baseline tier calc
       CalculatedAmountCents = amount,
-
-      // Final charged amount (may be overridden later)
       AmountCents = amount,
 
       CurrencyCode = currency,
@@ -91,9 +125,15 @@ public sealed class ShippingInvoiceService
     _db.ShippingInvoices.Add(inv);
     await _db.SaveChangesAsync(ct);
 
-    try { await _realtime.PublishInvoiceAsync(inv.Id, now, ct); } catch { /* best-effort */ }
+    try
+    {
+      await _realtime.PublishInvoiceAsync(inv.Id, now, ct);
+    }
+    catch
+    {
+      // best-effort
+    }
 
-    // Enqueue SHIPPING_INVOICE_CREATED (best-effort; dedupe prevents duplicates)
     try
     {
       if (group.UserId is Guid uid)
@@ -105,7 +145,9 @@ public sealed class ShippingInvoiceService
 
         if (!string.IsNullOrWhiteSpace(toEmail))
         {
-          var payload = $"{{\"invoiceId\":\"{inv.Id}\",\"groupId\":\"{group.Id}\",\"amountCents\":{inv.AmountCents},\"currency\":\"{inv.CurrencyCode}\"}}";
+          var payload =
+            $"{{\"invoiceId\":\"{inv.Id}\",\"groupId\":\"{group.Id}\",\"amountCents\":{inv.AmountCents},\"currency\":\"{inv.CurrencyCode}\"}}";
+
           await _emails.EnqueueAsync(
             toEmail: toEmail,
             templateKey: EmailTemplateKeys.ShippingInvoiceCreated,
@@ -116,19 +158,28 @@ public sealed class ShippingInvoiceService
         }
       }
     }
-    catch { /* best-effort */ }
+    catch
+    {
+      // best-effort
+    }
 
     return (true, null, inv);
   }
 
+  public async Task<(bool Ok, string? Error, ShippingInvoice? Invoice)> EnsureInvoiceForGroupAsync(
+    Guid groupId,
+    DateTimeOffset now,
+    CancellationToken ct)
+  {
+    return await ResolveCurrentInvoiceForGroupAsync(groupId, now, ct);
+  }
+
   public async Task<long> CalculateTierShippingCentsAsync(Guid groupId, CancellationToken ct)
   {
-    // total merchandise value = sum(order.TotalCents) for orders in group
     var merchTotal = await _db.Orders.AsNoTracking()
       .Where(o => o.FulfillmentGroupId == groupId)
       .SumAsync(o => (long)o.TotalCents, ct);
 
-    // Fallback tiers if config not present
     var tiers = _opts.Tiers;
     if (tiers is null || tiers.Count == 0)
     {
@@ -147,7 +198,6 @@ public sealed class ShippingInvoiceService
         return t.ShippingCents;
     }
 
-    // defensive fallback
     return tiers.Last().ShippingCents;
   }
 
@@ -166,11 +216,9 @@ public sealed class ShippingInvoiceService
     var group = await _db.FulfillmentGroups.SingleOrDefaultAsync(g => g.Id == groupId, ct);
     if (group is null) return (false, "GROUP_NOT_FOUND");
 
-    // Ensure a single "active" invoice we can override: unpaid if exists else create
     var (ok, err, inv) = await EnsureInvoiceForGroupAsync(groupId, now, ct);
     if (!ok || inv is null) return (false, err);
 
-    // If already paid and admin wants to change amount, disallow in v1
     if (string.Equals(inv.Status, "PAID", StringComparison.OrdinalIgnoreCase))
       return (false, "INVOICE_ALREADY_PAID");
 
@@ -181,7 +229,6 @@ public sealed class ShippingInvoiceService
     inv.OverrideReason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
     inv.UpdatedAt = now;
 
-    // If override to 0, mark as paid/satisfied
     if (amountCents == 0)
     {
       inv.Status = "PAID";
@@ -205,7 +252,14 @@ public sealed class ShippingInvoiceService
 
     await _db.SaveChangesAsync(ct);
 
-    try { await _realtime.PublishInvoiceAsync(inv.Id, now, ct); } catch { /* best-effort */ }
+    try
+    {
+      await _realtime.PublishInvoiceAsync(inv.Id, now, ct);
+    }
+    catch
+    {
+      // best-effort
+    }
 
     return (true, null);
   }
@@ -231,20 +285,47 @@ public sealed class ShippingInvoiceService
 
     await _db.SaveChangesAsync(ct);
 
-    try { await _realtime.PublishInvoiceAsync(inv.Id, now, ct); } catch { /* best-effort */ }
+    // Once one invoice is paid for a fulfillment group, any other unpaid invoices
+    // for that same group are stale and must be voided.
+    var staleUnpaid = await _db.ShippingInvoices
+      .Where(i =>
+        i.FulfillmentGroupId == inv.FulfillmentGroupId &&
+        i.Id != inv.Id &&
+        i.Status == "UNPAID")
+      .ToListAsync(ct);
+
+    if (staleUnpaid.Count > 0)
+    {
+      foreach (var stale in staleUnpaid)
+      {
+        stale.Status = "VOID";
+        stale.UpdatedAt = now;
+      }
+
+      await _db.SaveChangesAsync(ct);
+    }
+
+    try
+    {
+      await _realtime.PublishInvoiceAsync(inv.Id, now, ct);
+    }
+    catch
+    {
+      // best-effort
+    }
 
     return (true, null);
   }
 
   public async Task<(bool Ok, string? Error)> AdminOverrideInvoiceAsync(
-  Guid invoiceId,
-  long newAmountCents,
-  string reason,
-  Guid actorUserId,
-  DateTimeOffset now,
-  string? ipAddress,
-  string? userAgent,
-  CancellationToken ct)
+    Guid invoiceId,
+    long newAmountCents,
+    string reason,
+    Guid actorUserId,
+    DateTimeOffset now,
+    string? ipAddress,
+    string? userAgent,
+    CancellationToken ct)
   {
     if (newAmountCents < 0) return (false, "AMOUNT_INVALID");
     if (string.IsNullOrWhiteSpace(reason)) return (false, "REASON_REQUIRED");
@@ -253,42 +334,49 @@ public sealed class ShippingInvoiceService
     var inv = await _db.ShippingInvoices.SingleOrDefaultAsync(x => x.Id == invoiceId, ct);
     if (inv is null) return (false, "INVOICE_NOT_FOUND");
 
-    // Optional guardrail: disallow overriding after paid (safer ops)
     if (string.Equals(inv.Status, "PAID", StringComparison.OrdinalIgnoreCase))
       return (false, "INVOICE_ALREADY_PAID");
 
-    // Idempotent no-op
-    if (inv.AmountCents == newAmountCents &&
-        inv.IsOverride &&
-        string.Equals(inv.OverrideReason, reason, StringComparison.Ordinal))
-      return (true, null);
-
-    var before = $"{{\"amountCents\":{inv.AmountCents},\"calculatedAmountCents\":{inv.CalculatedAmountCents},\"isOverride\":{inv.IsOverride.ToString().ToLowerInvariant()},\"overrideReason\":{System.Text.Json.JsonSerializer.Serialize(inv.OverrideReason)} }}";
+    var beforeAmount = inv.AmountCents;
+    var beforeReason = inv.OverrideReason;
 
     inv.AmountCents = newAmountCents;
     inv.IsOverride = true;
     inv.OverrideReason = reason.Trim();
     inv.UpdatedAt = now;
 
-    var after = $"{{\"amountCents\":{inv.AmountCents},\"calculatedAmountCents\":{inv.CalculatedAmountCents},\"isOverride\":true,\"overrideReason\":{System.Text.Json.JsonSerializer.Serialize(inv.OverrideReason)} }}";
+    if (newAmountCents == 0)
+    {
+      inv.Status = "PAID";
+      inv.PaidAt = now;
+    }
 
     _db.AdminAuditLogs.Add(new AdminAuditLog
     {
       Id = Guid.NewGuid(),
       ActorUserId = actorUserId,
       ActorRole = UserRoles.Owner,
-      ActionType = "SHIPPING_INVOICE_OVERRIDE_APPLIED",
+      ActionType = "SHIPPING_INVOICE_OVERRIDDEN",
       EntityType = "SHIPPING_INVOICE",
       EntityId = inv.Id,
-      BeforeJson = before,
-      AfterJson = after,
+      BeforeJson = $"{{\"amountCents\":{beforeAmount},\"reason\":{(beforeReason is null ? "null" : $"\"{beforeReason.Replace("\"", "\\\"")}\"")}}}",
+      AfterJson = $"{{\"amountCents\":{newAmountCents},\"reason\":\"{reason.Trim().Replace("\"", "\\\"")}\"}}",
       IpAddress = ipAddress,
       UserAgent = userAgent,
       CreatedAt = now
     });
 
     await _db.SaveChangesAsync(ct);
-    try { await _realtime.PublishInvoiceAsync(inv.Id, now, ct); } catch { /* best-effort */ }
+
+    try
+    {
+      await _realtime.PublishInvoiceAsync(inv.Id, now, ct);
+    }
+    catch
+    {
+      // best-effort
+    }
+
     return (true, null);
   }
 }

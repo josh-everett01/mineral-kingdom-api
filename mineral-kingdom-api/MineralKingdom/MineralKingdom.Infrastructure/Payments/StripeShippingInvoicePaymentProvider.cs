@@ -1,21 +1,22 @@
+using Stripe.Checkout;
 using Microsoft.Extensions.Options;
 using MineralKingdom.Contracts.Orders;
 using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Configuration;
-using Stripe;
-using Stripe.Checkout;
 
 namespace MineralKingdom.Infrastructure.Payments;
 
 public sealed class StripeShippingInvoicePaymentProvider : IShippingInvoicePaymentProvider
 {
-  private readonly StripeOptions _stripe;
   private readonly PaymentsOptions _payments;
+  private readonly StripeOptions _stripe;
 
-  public StripeShippingInvoicePaymentProvider(IOptions<StripeOptions> stripe, IOptions<PaymentsOptions> payments)
+  public StripeShippingInvoicePaymentProvider(
+    IOptions<PaymentsOptions> payments,
+    IOptions<StripeOptions> stripe)
   {
-    _stripe = stripe.Value;
     _payments = payments.Value;
+    _stripe = stripe.Value;
   }
 
   public string Provider => PaymentProviders.Stripe;
@@ -29,53 +30,60 @@ public sealed class StripeShippingInvoicePaymentProvider : IShippingInvoicePayme
     string cancelUrl,
     CancellationToken ct)
   {
-    // FAKE mode: deterministic redirect for tests/dev without calling Stripe
     if (string.Equals(_payments.Mode, "FAKE", StringComparison.OrdinalIgnoreCase))
     {
-      var fakeSessionId = $"cs_test_{shippingInvoiceId:N}";
-      var fakeUrl = $"https://example.invalid/stripe/checkout?session_id={fakeSessionId}";
+      var fakeSessionId = $"cs_test_ship_{shippingInvoiceId:N}";
+      var fakeUrl = $"{successUrl}?session_id={fakeSessionId}";
       return new CreateShippingInvoicePaymentRedirectResult(fakeSessionId, fakeUrl);
     }
 
     if (string.IsNullOrWhiteSpace(_stripe.SecretKey))
-      throw new InvalidOperationException("Stripe SecretKey is not configured (MK_STRIPE__SECRET_KEY).");
+      throw new InvalidOperationException("STRIPE_NOT_CONFIGURED");
 
-    StripeConfiguration.ApiKey = _stripe.SecretKey;
+    Stripe.StripeConfiguration.ApiKey = _stripe.SecretKey;
 
-    var svc = new SessionService();
-
-    var options = new SessionCreateOptions
-    {
-      Mode = "payment",
-      SuccessUrl = successUrl,
-      CancelUrl = cancelUrl,
-      Metadata = new Dictionary<string, string>
+    var service = new SessionService();
+    var session = await service.CreateAsync(
+      new SessionCreateOptions
       {
-        ["shipping_invoice_id"] = shippingInvoiceId.ToString(),
-        ["fulfillment_group_id"] = fulfillmentGroupId.ToString()
-      },
-      LineItems = new List<SessionLineItemOptions>
-      {
-        new SessionLineItemOptions
+        Mode = "payment",
+        SuccessUrl = successUrl,
+        CancelUrl = cancelUrl,
+        ClientReferenceId = shippingInvoiceId.ToString(),
+        Metadata = new Dictionary<string, string>
         {
-          Quantity = 1,
-          PriceData = new SessionLineItemPriceDataOptions
+          ["shippingInvoiceId"] = shippingInvoiceId.ToString(),
+          ["fulfillmentGroupId"] = fulfillmentGroupId.ToString()
+        },
+        LineItems = new List<SessionLineItemOptions>
+        {
+          new()
           {
-            Currency = currencyCode.ToLowerInvariant(),
-            UnitAmount = amountCents,
-            ProductData = new SessionLineItemPriceDataProductDataOptions
+            Quantity = 1,
+            PriceData = new SessionLineItemPriceDataOptions
             {
-              Name = "Shipping"
+              Currency = currencyCode.ToLowerInvariant(),
+              UnitAmount = amountCents,
+              ProductData = new SessionLineItemPriceDataProductDataOptions
+              {
+                Name = "Open Box shipping"
+              }
             }
           }
         }
-      }
-    };
+      },
+      cancellationToken: ct);
 
-    var session = await svc.CreateAsync(options, cancellationToken: ct);
+    if (string.IsNullOrWhiteSpace(session.Id) || string.IsNullOrWhiteSpace(session.Url))
+      throw new InvalidOperationException("STRIPE_SESSION_CREATION_FAILED");
 
-    return new CreateShippingInvoicePaymentRedirectResult(
-      ProviderCheckoutId: session.Id,
-      RedirectUrl: session.Url);
+    return new CreateShippingInvoicePaymentRedirectResult(session.Id, session.Url);
+  }
+
+  public Task<CaptureShippingInvoicePaymentResult> CaptureOrderAsync(
+    string providerCheckoutId,
+    CancellationToken ct)
+  {
+    throw new InvalidOperationException("PROVIDER_CAPTURE_NOT_SUPPORTED");
   }
 }

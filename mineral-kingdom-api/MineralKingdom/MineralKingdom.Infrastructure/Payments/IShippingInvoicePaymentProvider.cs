@@ -14,4 +14,14 @@ public interface IShippingInvoicePaymentProvider
     string successUrl,
     string cancelUrl,
     CancellationToken ct);
+
+  Task<CaptureShippingInvoicePaymentResult> CaptureOrderAsync(
+    string providerCheckoutId,
+    CancellationToken ct);
 }
+
+public sealed record CaptureShippingInvoicePaymentResult(
+  string ProviderCheckoutId,
+  string? CaptureId,
+  string Status
+);

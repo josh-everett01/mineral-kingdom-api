@@ -107,7 +107,7 @@ public sealed class ShippingInvoiceOverrideTests : IClassFixture<PostgresContain
         .ToListAsync();
 
       audits.Should().NotBeEmpty();
-      audits[0].ActionType.Should().Be("SHIPPING_INVOICE_OVERRIDE_APPLIED");
+      audits[0].ActionType.Should().Be("SHIPPING_INVOICE_OVERRIDDEN");
       audits[0].BeforeJson.Should().NotBeNull();
       audits[0].AfterJson.Should().NotBeNull();
     }

@@ -27,15 +27,26 @@ public sealed class OpenBoxShippingInvoiceController : ControllerBase
   {
     var userId = User.GetUserId();
 
-    var group = await _db.FulfillmentGroups.AsNoTracking()
+    // If the user currently has an OPEN box, there should not yet be an active
+    // shipping invoice for that box. Do not return a historical paid invoice
+    // from an earlier closed box.
+    var openGroup = await _db.FulfillmentGroups.AsNoTracking()
+      .OrderByDescending(g => g.UpdatedAt)
+      .FirstOrDefaultAsync(g => g.UserId == userId && g.BoxStatus == "OPEN", ct);
+
+    if (openGroup is not null)
+      return NotFound(new { error = "NO_INVOICE_FOR_OPEN_BOX" });
+
+    // Otherwise, fall back to the most recent CLOSED box and its invoice.
+    var closedGroup = await _db.FulfillmentGroups.AsNoTracking()
       .OrderByDescending(g => g.UpdatedAt)
       .FirstOrDefaultAsync(g => g.UserId == userId && g.BoxStatus == "CLOSED", ct);
 
-    if (group is null) return NotFound(new { error = "NO_CLOSED_BOX" });
+    if (closedGroup is null) return NotFound(new { error = "NO_CLOSED_BOX" });
 
     var inv = await _db.ShippingInvoices.AsNoTracking()
       .OrderByDescending(i => i.CreatedAt)
-      .FirstOrDefaultAsync(i => i.FulfillmentGroupId == group.Id, ct);
+      .FirstOrDefaultAsync(i => i.FulfillmentGroupId == closedGroup.Id, ct);
 
     if (inv is null) return NotFound(new { error = "INVOICE_NOT_FOUND" });
 

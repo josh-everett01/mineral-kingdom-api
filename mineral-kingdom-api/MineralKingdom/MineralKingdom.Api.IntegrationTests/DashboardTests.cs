@@ -812,4 +812,103 @@ public sealed class DashboardTests : IClassFixture<PostgresContainerFixture>
       x.OrderNumber == "MK-DASH-STORE-001" &&
       x.SourceType == "STORE");
   }
+
+  [Fact]
+  public async Task Dashboard_open_box_contains_paid_open_box_orders()
+  {
+    await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
+
+    var userId = Guid.NewGuid();
+    var groupId = Guid.NewGuid();
+    var orderId = Guid.NewGuid();
+    var listingId = Guid.NewGuid();
+    var now = DateTimeOffset.UtcNow;
+
+    await using (var scope = factory.Services.CreateAsyncScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      db.Users.Add(new User
+      {
+        Id = userId,
+        Email = "dashboard_open_box_orders@example.com",
+        EmailVerified = true,
+        Role = UserRoles.User,
+        CreatedAt = now.UtcDateTime,
+        UpdatedAt = now.UtcDateTime
+      });
+
+      db.FulfillmentGroups.Add(new FulfillmentGroup
+      {
+        Id = groupId,
+        UserId = userId,
+        GuestEmail = null,
+        BoxStatus = "OPEN",
+        ClosedAt = null,
+        Status = "READY_TO_FULFILL",
+        CreatedAt = now.AddHours(-1),
+        UpdatedAt = now
+      });
+
+      db.Listings.Add(new Listing
+      {
+        Id = listingId,
+        Title = "Open Box Quartz",
+        Description = "Dashboard preview listing",
+        Status = "PUBLISHED",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.Orders.Add(new Order
+      {
+        Id = orderId,
+        UserId = userId,
+        GuestEmail = null,
+        OrderNumber = "MK-DASH-OB-001",
+        SourceType = "AUCTION",
+        Status = "READY_TO_FULFILL",
+        ShippingMode = "OPEN_BOX",
+        PaidAt = now,
+        CurrencyCode = "USD",
+        SubtotalCents = 2500,
+        DiscountTotalCents = 0,
+        TotalCents = 2500,
+        FulfillmentGroupId = groupId,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.OrderLines.Add(new OrderLine
+      {
+        Id = Guid.NewGuid(),
+        OrderId = orderId,
+        OfferId = null,
+        ListingId = listingId,
+        Quantity = 1,
+        UnitPriceCents = 2500,
+        UnitDiscountCents = 0,
+        UnitFinalPriceCents = 2500,
+        LineSubtotalCents = 2500,
+        LineDiscountCents = 0,
+        LineTotalCents = 2500,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      await db.SaveChangesAsync();
+    }
+
+    using var client = factory.CreateClient();
+    AsUser(client, userId);
+
+    var dto = await client.GetFromJsonAsync<DashboardDto>("/api/me/dashboard");
+    dto.Should().NotBeNull();
+
+    dto!.OpenBox.Should().NotBeNull();
+    dto.OpenBox!.FulfillmentGroupId.Should().Be(groupId);
+    dto.OpenBox.Orders.Should().ContainSingle(x => x.OrderId == orderId);
+    dto.OpenBox.Orders[0].ShippingMode.Should().Be("OPEN_BOX");
+    dto.OpenBox.Orders[0].Status.Should().Be("READY_TO_FULFILL");
+  }
 }

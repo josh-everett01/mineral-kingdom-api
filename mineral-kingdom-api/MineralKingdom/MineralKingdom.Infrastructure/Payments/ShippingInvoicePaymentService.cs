@@ -1,29 +1,44 @@
 using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Listings;
 using MineralKingdom.Contracts.Orders;
+using MineralKingdom.Contracts.Store;
+using MineralKingdom.Infrastructure.Notifications;
+using MineralKingdom.Infrastructure.Payments.Realtime;
 using MineralKingdom.Infrastructure.Persistence;
+using MineralKingdom.Infrastructure.Persistence.Entities;
 
 namespace MineralKingdom.Infrastructure.Payments;
 
 public sealed class ShippingInvoicePaymentService
 {
   private readonly MineralKingdomDbContext _db;
+  private readonly ShippingInvoiceService _shippingInvoices;
   private readonly IEnumerable<IShippingInvoicePaymentProvider> _providers;
+  private readonly EmailOutboxService _emails;
+  private readonly IShippingInvoiceRealtimePublisher _realtime;
 
-  public ShippingInvoicePaymentService(MineralKingdomDbContext db, IEnumerable<IShippingInvoicePaymentProvider> providers)
+  public ShippingInvoicePaymentService(
+    MineralKingdomDbContext db,
+    ShippingInvoiceService shippingInvoices,
+    IEnumerable<IShippingInvoicePaymentProvider> providers,
+    EmailOutboxService emails,
+    IShippingInvoiceRealtimePublisher realtime)
   {
     _db = db;
+    _shippingInvoices = shippingInvoices;
     _providers = providers;
+    _emails = emails;
+    _realtime = realtime;
   }
 
   public async Task<(bool Ok, string? Error, CreateShippingInvoicePaymentRedirectResult? Result)> StartAsync(
-    Guid userId,
-    Guid fulfillmentGroupId,
-    string provider,
-    string successUrl,
-    string cancelUrl,
-    DateTimeOffset now,
-    CancellationToken ct)
+  Guid userId,
+  Guid fulfillmentGroupId,
+  string provider,
+  string successUrl,
+  string cancelUrl,
+  DateTimeOffset now,
+  CancellationToken ct)
   {
     var group = await _db.FulfillmentGroups.SingleOrDefaultAsync(g => g.Id == fulfillmentGroupId, ct);
     if (group is null) return (false, "GROUP_NOT_FOUND", null);
@@ -32,14 +47,17 @@ public sealed class ShippingInvoicePaymentService
     if (!string.Equals(group.BoxStatus, "CLOSED", StringComparison.OrdinalIgnoreCase))
       return (false, "BOX_NOT_CLOSED", null);
 
-    var inv = await _db.ShippingInvoices
-      .OrderByDescending(i => i.CreatedAt)
-      .FirstOrDefaultAsync(i => i.FulfillmentGroupId == fulfillmentGroupId, ct);
+    var (resolvedOk, resolvedErr, inv) =
+      await _shippingInvoices.ResolveCurrentInvoiceForGroupAsync(fulfillmentGroupId, now, ct);
 
-    if (inv is null) return (false, "INVOICE_NOT_FOUND", null);
+    if (!resolvedOk || inv is null)
+      return (false, resolvedErr ?? "INVOICE_NOT_FOUND", null);
 
     if (string.Equals(inv.Status, "PAID", StringComparison.OrdinalIgnoreCase))
       return (false, "INVOICE_ALREADY_PAID", null);
+
+    if (!string.Equals(inv.Status, "UNPAID", StringComparison.OrdinalIgnoreCase))
+      return (false, "INVOICE_NOT_ACTIONABLE", null);
 
     if (inv.AmountCents <= 0)
       return (false, "NO_PAYMENT_REQUIRED", null);
@@ -51,7 +69,14 @@ public sealed class ShippingInvoicePaymentService
     var p = _providers.FirstOrDefault(x => string.Equals(x.Provider, provider, StringComparison.OrdinalIgnoreCase));
     if (p is null) return (false, "UNSUPPORTED_PROVIDER", null);
 
-    var redirect = await p.CreateRedirectAsync(inv.Id, fulfillmentGroupId, inv.AmountCents, inv.CurrencyCode, successUrl, cancelUrl, ct);
+    var redirect = await p.CreateRedirectAsync(
+      inv.Id,
+      fulfillmentGroupId,
+      inv.AmountCents,
+      inv.CurrencyCode,
+      successUrl,
+      cancelUrl,
+      ct);
 
     inv.Provider = p.Provider;
     inv.ProviderCheckoutId = redirect.ProviderCheckoutId;
@@ -62,10 +87,119 @@ public sealed class ShippingInvoicePaymentService
     return (true, null, redirect);
   }
 
+  public async Task<(bool Ok, string? Error, ShippingInvoice? Invoice)> CaptureAsync(
+    Guid invoiceId,
+    Guid userId,
+    DateTimeOffset now,
+    CancellationToken ct)
+  {
+    var inv = await _db.ShippingInvoices.SingleOrDefaultAsync(i => i.Id == invoiceId, ct);
+    if (inv is null)
+      return (false, "INVOICE_NOT_FOUND", null);
+
+    var group = await _db.FulfillmentGroups.SingleOrDefaultAsync(g => g.Id == inv.FulfillmentGroupId, ct);
+    if (group is null || group.UserId != userId)
+      return (false, "INVOICE_NOT_FOUND", null);
+
+    if (!string.Equals(inv.Provider, PaymentProviders.PayPal, StringComparison.OrdinalIgnoreCase))
+      return (false, "PROVIDER_CAPTURE_NOT_SUPPORTED", inv);
+
+    if (string.Equals(inv.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+      return (true, null, inv);
+
+    if (string.IsNullOrWhiteSpace(inv.ProviderCheckoutId))
+      return (false, "PROVIDER_CHECKOUT_ID_MISSING", inv);
+
+    var paypalProvider = _providers.OfType<PayPalShippingInvoicePaymentProvider>().SingleOrDefault();
+    if (paypalProvider is null)
+      return (false, "PROVIDER_CAPTURE_NOT_SUPPORTED", inv);
+
+    try
+    {
+      var capture = await paypalProvider.CaptureOrderAsync(inv.ProviderCheckoutId, ct);
+
+      inv.ProviderCheckoutId = capture.ProviderCheckoutId;
+      inv.UpdatedAt = now;
+
+      if (!string.IsNullOrWhiteSpace(capture.CaptureId))
+      {
+        inv.ProviderPaymentId = capture.CaptureId;
+      }
+
+      var isCaptureConfirmed =
+        string.Equals(capture.Status, "COMPLETED", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(capture.Status, "ALREADY_CAPTURED", StringComparison.OrdinalIgnoreCase);
+
+      if (!isCaptureConfirmed)
+        return (false, "PAYPAL_CAPTURE_FAILED", inv);
+
+      var wasPaid = string.Equals(inv.Status, "PAID", StringComparison.OrdinalIgnoreCase);
+
+      inv.Status = "PAID";
+      inv.PaidAt ??= now;
+      inv.UpdatedAt = now;
+
+      if (!wasPaid)
+      {
+        try
+        {
+          if (group.UserId is Guid uid)
+          {
+            var toEmail = await _db.Users
+              .AsNoTracking()
+              .Where(u => u.Id == uid)
+              .Select(u => u.Email)
+              .SingleOrDefaultAsync(ct);
+
+            if (!string.IsNullOrWhiteSpace(toEmail))
+            {
+              var payload =
+                $"{{\"invoiceId\":\"{inv.Id}\",\"groupId\":\"{inv.FulfillmentGroupId}\",\"amountCents\":{inv.AmountCents}}}";
+
+              await _emails.EnqueueAsync(
+                toEmail: toEmail,
+                templateKey: EmailTemplateKeys.ShippingInvoicePaid,
+                payloadJson: payload,
+                dedupeKey: EmailDedupeKeys.ShippingInvoicePaid(inv.Id, toEmail),
+                now: now,
+                ct: ct);
+            }
+          }
+        }
+        catch
+        {
+          // best-effort
+        }
+      }
+
+      await _db.SaveChangesAsync(ct);
+
+      try
+      {
+        await _realtime.PublishInvoiceAsync(inv.Id, now, ct);
+      }
+      catch
+      {
+        // best-effort
+      }
+
+      return (true, null, inv);
+    }
+    catch (InvalidOperationException ex) when (
+      ex.Message.StartsWith("PAYPAL_NOT_CONFIGURED", StringComparison.OrdinalIgnoreCase) ||
+      ex.Message.StartsWith("PAYPAL_CAPTURE_ORDER_FAILED", StringComparison.OrdinalIgnoreCase) ||
+      ex.Message.StartsWith("PAYPAL_", StringComparison.OrdinalIgnoreCase))
+    {
+      inv.UpdatedAt = now;
+      await _db.SaveChangesAsync(ct);
+      return (false, "PAYPAL_CAPTURE_FAILED", inv);
+    }
+  }
+
   public async Task<(bool Ok, string? Error, ShippingInvoiceDetailDto? Detail)> GetInvoiceDetailForUserAsync(
-  Guid userId,
-  Guid invoiceId,
-  CancellationToken ct)
+    Guid userId,
+    Guid invoiceId,
+    CancellationToken ct)
   {
     var row = await (
       from inv in _db.ShippingInvoices.AsNoTracking()

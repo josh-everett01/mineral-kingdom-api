@@ -4,6 +4,7 @@ using MineralKingdom.Contracts.Auctions;
 using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Auctions.Realtime;
 using MineralKingdom.Infrastructure.Notifications;
+using MineralKingdom.Infrastructure.Orders;
 using MineralKingdom.Infrastructure.Orders.Realtime;
 using MineralKingdom.Infrastructure.Payments.Realtime;
 using MineralKingdom.Infrastructure.Persistence;
@@ -16,16 +17,18 @@ public sealed class PaymentWebhookService
 {
   private readonly MineralKingdomDbContext _db;
   private readonly CheckoutService _checkout;
+  private readonly OpenBoxService _openBox;
   private readonly IAuctionRealtimePublisher _realtime;
   private readonly EmailOutboxService _emails;
   private readonly IOrderRealtimePublisher _ordersRealtime;
   private readonly IShippingInvoiceRealtimePublisher _shippingInvoicesRealtime;
   private readonly ICheckoutPaymentRealtimePublisher _checkoutPaymentsRealtime;
 
-  public PaymentWebhookService(MineralKingdomDbContext db, CheckoutService checkout, IAuctionRealtimePublisher realtime, EmailOutboxService emails, IOrderRealtimePublisher ordersRealtime, IShippingInvoiceRealtimePublisher shippingInvoicesRealtime, ICheckoutPaymentRealtimePublisher checkoutPaymentsRealtime)
+  public PaymentWebhookService(MineralKingdomDbContext db, CheckoutService checkout, OpenBoxService openBox, IAuctionRealtimePublisher realtime, EmailOutboxService emails, IOrderRealtimePublisher ordersRealtime, IShippingInvoiceRealtimePublisher shippingInvoicesRealtime, ICheckoutPaymentRealtimePublisher checkoutPaymentsRealtime)
   {
     _db = db;
     _checkout = checkout;
+    _openBox = openBox;
     _realtime = realtime;
     _emails = emails;
     _ordersRealtime = ordersRealtime;
@@ -480,12 +483,39 @@ public sealed class PaymentWebhookService
     if (order is null) return;
 
     if (string.Equals(order.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase))
+    {
+      // Even if already marked ready, ensure OPEN_BOX orders are actually attached to the open box.
+      if (string.Equals(order.ShippingMode, "OPEN_BOX", StringComparison.OrdinalIgnoreCase) &&
+          order.UserId.HasValue &&
+          !order.FulfillmentGroupId.HasValue)
+      {
+        await _openBox.GetOrCreateOpenBoxAsync(order.UserId.Value, now, ct);
+        await _openBox.AddOrderToOpenBoxAsync(order.UserId.Value, order.Id, now, ct);
+
+        // reload after assignment
+        order = await _db.Orders.SingleOrDefaultAsync(o => o.Id == orderId, ct);
+      }
+
       return;
+    }
 
     // Mark order paid
     order.Status = "READY_TO_FULFILL";
     order.PaidAt ??= now;
     order.UpdatedAt = now;
+
+    // If this is an OPEN_BOX order, attach it to the user's open box now that payment is confirmed.
+    if (string.Equals(order.ShippingMode, "OPEN_BOX", StringComparison.OrdinalIgnoreCase) &&
+        order.UserId.HasValue)
+    {
+      var (boxOk, boxErr, _) = await _openBox.GetOrCreateOpenBoxAsync(order.UserId.Value, now, ct);
+      if (!boxOk)
+        throw new InvalidOperationException($"OPEN_BOX_GET_OR_CREATE_FAILED:{boxErr ?? "UNKNOWN"}:orderId={order.Id}");
+
+      var (addOk, addErr) = await _openBox.AddOrderToOpenBoxAsync(order.UserId.Value, order.Id, now, ct);
+      if (!addOk)
+        throw new InvalidOperationException($"OPEN_BOX_ADD_ORDER_FAILED:{addErr ?? "UNKNOWN"}:orderId={order.Id}");
+    }
 
     // Auction linkage: update auction + listing + offers
     if (string.Equals(order.SourceType, "AUCTION", StringComparison.OrdinalIgnoreCase) && order.AuctionId.HasValue)
@@ -523,12 +553,11 @@ public sealed class PaymentWebhookService
 
     await _db.SaveChangesAsync(ct);
 
-    try { await _ordersRealtime.PublishOrderAsync(order.Id, now, ct); } catch { /* best-effort */ }
+    try { await _ordersRealtime.PublishOrderAsync(order.Id, now, ct); } catch { }
 
-    // ✅ Publish AFTER save (DB authoritative)
     if (order.AuctionId.HasValue)
     {
-      try { await _realtime.PublishAuctionAsync(order.AuctionId.Value, now, ct); } catch { /* best-effort */ }
+      try { await _realtime.PublishAuctionAsync(order.AuctionId.Value, now, ct); } catch { }
     }
   }
 

@@ -533,4 +533,79 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
     dto.Items[0].Locality.Should().Be("Arkansas, USA");
     dto.Items[0].Quantity.Should().Be(1);
   }
+
+  [Fact]
+  public async Task Open_box_shipping_invoice_endpoint_returns_not_found_when_user_has_active_open_box_even_if_old_closed_box_invoice_exists()
+  {
+    await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
+
+    var userId = Guid.NewGuid();
+    var now = DateTimeOffset.UtcNow;
+
+    await using (var scope = factory.Services.CreateAsyncScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      db.Users.Add(new User
+      {
+        Id = userId,
+        Email = "open_box_invoice_guardrail@example.com",
+        EmailVerified = true,
+        Role = UserRoles.User,
+        CreatedAt = now.UtcDateTime,
+        UpdatedAt = now.UtcDateTime
+      });
+
+      var closedGroupId = Guid.NewGuid();
+      var openGroupId = Guid.NewGuid();
+
+      db.FulfillmentGroups.AddRange(
+        new FulfillmentGroup
+        {
+          Id = closedGroupId,
+          UserId = userId,
+          GuestEmail = null,
+          BoxStatus = "CLOSED",
+          ClosedAt = now.AddDays(-2),
+          Status = "READY_TO_FULFILL",
+          CreatedAt = now.AddDays(-3),
+          UpdatedAt = now.AddDays(-2)
+        },
+        new FulfillmentGroup
+        {
+          Id = openGroupId,
+          UserId = userId,
+          GuestEmail = null,
+          BoxStatus = "OPEN",
+          ClosedAt = null,
+          Status = "READY_TO_FULFILL",
+          CreatedAt = now.AddHours(-1),
+          UpdatedAt = now
+        });
+
+      db.ShippingInvoices.Add(new ShippingInvoice
+      {
+        Id = Guid.NewGuid(),
+        FulfillmentGroupId = closedGroupId,
+        AmountCents = 599,
+        CalculatedAmountCents = 599,
+        CurrencyCode = "USD",
+        Status = "PAID",
+        PaidAt = now.AddDays(-2),
+        CreatedAt = now.AddDays(-2),
+        UpdatedAt = now.AddDays(-2)
+      });
+
+      await db.SaveChangesAsync();
+    }
+
+    using var client = factory.CreateClient();
+    AsUser(client, userId, UserRoles.User);
+
+    var res = await client.GetAsync("/api/me/open-box/shipping-invoice");
+    res.StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+    var body = await res.Content.ReadAsStringAsync();
+    body.Should().Contain("NO_INVOICE_FOR_OPEN_BOX");
+  }
 }

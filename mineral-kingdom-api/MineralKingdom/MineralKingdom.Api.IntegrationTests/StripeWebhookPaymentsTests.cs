@@ -3,6 +3,8 @@ using System.Net.Http.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using MineralKingdom.Contracts.Auctions;
+using MineralKingdom.Contracts.Auth;
 using MineralKingdom.Contracts.Listings;
 using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Persistence;
@@ -283,24 +285,179 @@ public sealed class StripeWebhookPaymentsTests : IClassFixture<PostgresContainer
     await db.SaveChangesAsync();
   }
 
-  private static string StripeCheckoutSessionCompletedJson(Guid holdId, Guid paymentId, string paymentIntentId)
+  [Fact]
+  public async Task Stripe_order_payment_webhook_confirms_open_box_order_and_assigns_open_box()
   {
-    return $$"""
+    await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
+    await MigrateAsync(factory);
+
+    var userId = Guid.NewGuid();
+    var orderId = Guid.NewGuid();
+    var orderPaymentId = Guid.NewGuid();
+    var auctionId = Guid.NewGuid();
+    var listingId = Guid.NewGuid();
+    var now = DateTimeOffset.UtcNow;
+
+    using (var scope = factory.Services.CreateScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      db.Users.Add(new User
+      {
+        Id = userId,
+        Email = "stripe_open_box_user@example.com",
+        EmailVerified = true,
+        Role = UserRoles.User,
+        CreatedAt = now.UtcDateTime,
+        UpdatedAt = now.UtcDateTime
+      });
+
+      db.Listings.Add(new Listing
+      {
+        Id = listingId,
+        Title = "Auction specimen",
+        Description = "Auction listing",
+        Status = ListingStatuses.Published,
+        QuantityTotal = 1,
+        QuantityAvailable = 1,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.Auctions.Add(new Auction
+      {
+        Id = auctionId,
+        ListingId = listingId,
+        Status = AuctionStatuses.ClosedWaitingOnPayment,
+        CurrentLeaderUserId = userId,
+        CurrentPriceCents = 10500,
+        StartingPriceCents = 1000,
+        CloseTime = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-10), DateTimeKind.Utc),
+        StartTime = DateTime.SpecifyKind(DateTime.UtcNow.AddHours(-2), DateTimeKind.Utc),
+        BidCount = 3,
+        ReserveMet = true,
+        CreatedAt = now.AddHours(-2),
+        UpdatedAt = now
+      });
+
+      db.Orders.Add(new Order
+      {
+        Id = orderId,
+        UserId = userId,
+        GuestEmail = null,
+        OrderNumber = $"MK-OBX-{Guid.NewGuid():N}"[..18],
+        SourceType = "AUCTION",
+        AuctionId = auctionId,
+        Status = "AWAITING_PAYMENT",
+        ShippingMode = "OPEN_BOX",
+        PaymentDueAt = now.AddDays(2),
+        PaidAt = null,
+        CurrencyCode = "USD",
+        SubtotalCents = 10500,
+        DiscountTotalCents = 0,
+        TotalCents = 10500,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.OrderPayments.Add(new OrderPayment
+      {
+        Id = orderPaymentId,
+        OrderId = orderId,
+        Provider = PaymentProviders.Stripe,
+        Status = CheckoutPaymentStatuses.Redirected,
+        ProviderCheckoutId = "cs_test_order_open_box_1",
+        ProviderPaymentId = null,
+        AmountCents = 10500,
+        CurrencyCode = "USD",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      await db.SaveChangesAsync();
+    }
+
+    using var client = factory.CreateClient();
+
+    var eventId = "evt_test_stripe_order_open_box_1";
+    var paymentIntentId = "pi_test_order_open_box_1";
+    var payload = $$"""
 {
-  "id": "evt_placeholder",
+  "id": "{{eventId}}",
   "type": "checkout.session.completed",
   "data": {
     "object": {
       "object": "checkout.session",
-      "payment_status": "READY_TO_FULFILL",
+      "id": "cs_test_order_open_box_1",
+      "payment_status": "paid",
       "payment_intent": "{{paymentIntentId}}",
       "metadata": {
-        "hold_id": "{{holdId}}",
-        "payment_id": "{{paymentId}}"
+        "order_id": "{{orderId}}",
+        "order_payment_id": "{{orderPaymentId}}"
       }
     }
   }
 }
 """;
+
+    var req = new HttpRequestMessage(HttpMethod.Post, "/api/webhooks/stripe")
+    {
+      Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json")
+    };
+    req.Headers.Add("X-Stripe-Event-Id", eventId);
+
+    var res = await client.SendAsync(req);
+    res.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    using (var scope = factory.Services.CreateScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var orderPayment = await db.OrderPayments.SingleAsync(x => x.Id == orderPaymentId);
+      orderPayment.Status.Should().Be(CheckoutPaymentStatuses.Succeeded);
+      orderPayment.ProviderPaymentId.Should().Be(paymentIntentId);
+
+      var order = await db.Orders.SingleAsync(x => x.Id == orderId);
+      order.Status.Should().Be("READY_TO_FULFILL");
+      order.PaidAt.Should().NotBeNull();
+      order.FulfillmentGroupId.Should().NotBeNull();
+
+      var box = await db.FulfillmentGroups.SingleAsync(x => x.Id == order.FulfillmentGroupId!.Value);
+      box.UserId.Should().Be(userId);
+      box.BoxStatus.Should().Be("OPEN");
+
+      var auction = await db.Auctions.SingleAsync(x => x.Id == auctionId);
+      auction.Status.Should().Be(AuctionStatuses.ClosedPaid);
+
+      var listing = await db.Listings.SingleAsync(x => x.Id == listingId);
+      listing.Status.Should().Be(ListingStatuses.Sold);
+      listing.QuantityAvailable.Should().Be(0);
+
+      var webhookEvent = await db.PaymentWebhookEvents.SingleAsync(
+        x => x.Provider == PaymentProviders.Stripe && x.EventId == eventId);
+
+      webhookEvent.OrderPaymentId.Should().Be(orderPaymentId);
+    }
+  }
+
+  private static string StripeCheckoutSessionCompletedJson(Guid holdId, Guid paymentId, string paymentIntentId)
+  {
+    return $$"""
+    {
+      "id": "evt_placeholder",
+      "type": "checkout.session.completed",
+      "data": {
+        "object": {
+          "object": "checkout.session",
+          "payment_status": "READY_TO_FULFILL",
+          "payment_intent": "{{paymentIntentId}}",
+          "metadata": {
+            "hold_id": "{{holdId}}",
+            "payment_id": "{{paymentId}}"
+          }
+        }
+      }
+    }
+    """;
   }
 }

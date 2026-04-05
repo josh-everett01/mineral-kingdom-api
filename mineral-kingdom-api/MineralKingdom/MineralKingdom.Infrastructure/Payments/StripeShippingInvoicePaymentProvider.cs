@@ -52,8 +52,8 @@ public sealed class StripeShippingInvoicePaymentProvider : IShippingInvoicePayme
         ClientReferenceId = shippingInvoiceId.ToString(),
         Metadata = new Dictionary<string, string>
         {
-          ["shippingInvoiceId"] = shippingInvoiceId.ToString(),
-          ["fulfillmentGroupId"] = fulfillmentGroupId.ToString()
+          ["shipping_invoice_id"] = shippingInvoiceId.ToString(),
+          ["fulfillment_group_id"] = fulfillmentGroupId.ToString()
         },
         LineItems = new List<SessionLineItemOptions>
         {

@@ -460,4 +460,104 @@ public sealed class StripeWebhookPaymentsTests : IClassFixture<PostgresContainer
     }
     """;
   }
+
+  [Fact]
+  public async Task Stripe_checkout_session_completed_webhook_marks_shipping_invoice_paid()
+  {
+    await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
+    await MigrateAsync(factory);
+
+    var userId = Guid.NewGuid();
+    var groupId = Guid.NewGuid();
+    var invoiceId = Guid.NewGuid();
+    var now = DateTimeOffset.UtcNow;
+
+    using (var scope = factory.Services.CreateScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      db.Users.Add(new User
+      {
+        Id = userId,
+        Email = "stripe_ship_webhook@example.com",
+        EmailVerified = true,
+        Role = UserRoles.User,
+        CreatedAt = now.UtcDateTime,
+        UpdatedAt = now.UtcDateTime
+      });
+
+      db.FulfillmentGroups.Add(new FulfillmentGroup
+      {
+        Id = groupId,
+        UserId = userId,
+        GuestEmail = null,
+        BoxStatus = "CLOSED",
+        ClosedAt = now,
+        Status = "READY_TO_FULFILL",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.ShippingInvoices.Add(new ShippingInvoice
+      {
+        Id = invoiceId,
+        FulfillmentGroupId = groupId,
+        AmountCents = 599,
+        CalculatedAmountCents = 599,
+        CurrencyCode = "USD",
+        Status = "UNPAID",
+        Provider = PaymentProviders.Stripe,
+        ProviderCheckoutId = "cs_test_ship_webhook_1",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      await db.SaveChangesAsync();
+    }
+
+    var client = factory.CreateClient();
+
+    var eventId = "evt_test_stripe_ship_invoice_1";
+    var paymentIntentId = "pi_test_ship_123";
+    var payload = $$"""
+{
+  "id": "evt_placeholder",
+  "type": "checkout.session.completed",
+  "data": {
+    "object": {
+      "object": "checkout.session",
+      "id": "cs_test_ship_webhook_1",
+      "payment_intent": "{{paymentIntentId}}",
+      "metadata": {
+        "shipping_invoice_id": "{{invoiceId}}"
+      }
+    }
+  }
+}
+""";
+
+    var req = new HttpRequestMessage(HttpMethod.Post, "/api/webhooks/stripe")
+    {
+      Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json")
+    };
+    req.Headers.Add("X-Stripe-Event-Id", eventId);
+
+    var res = await client.SendAsync(req);
+    res.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    using (var scope = factory.Services.CreateScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var invoice = await db.ShippingInvoices.SingleAsync(i => i.Id == invoiceId);
+      invoice.Status.Should().Be("PAID");
+      invoice.PaidAt.Should().NotBeNull();
+      invoice.ProviderPaymentId.Should().Be(paymentIntentId);
+
+      var webhookEvent = await db.PaymentWebhookEvents
+        .SingleAsync(e => e.Provider == PaymentProviders.Stripe && e.EventId == eventId);
+
+      webhookEvent.ProcessedAt.Should().NotBeNull();
+    }
+  }
 }

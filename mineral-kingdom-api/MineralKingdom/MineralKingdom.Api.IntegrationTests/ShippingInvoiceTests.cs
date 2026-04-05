@@ -390,6 +390,7 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
 
     var userId = Guid.NewGuid();
     var now = DateTimeOffset.UtcNow;
+    var mineralName = $"Quartz-{Guid.NewGuid():N}";
 
     await using (var scope = factory.Services.CreateAsyncScope())
     {
@@ -414,7 +415,7 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
       db.Minerals.Add(new Mineral
       {
         Id = mineralId,
-        Name = "Quartz",
+        Name = mineralName,
         CreatedAt = now,
         UpdatedAt = now
       });
@@ -529,7 +530,7 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
     dto.Items[0].OrderNumber.Should().Be("MK-20260331-SHIP01");
     dto.Items[0].SourceType.Should().Be("AUCTION");
     dto.Items[0].PrimaryImageUrl.Should().Be("https://cdn.example.com/quartz.jpg");
-    dto.Items[0].MineralName.Should().Be("Quartz");
+    dto.Items[0].MineralName.Should().Be(mineralName);
     dto.Items[0].Locality.Should().Be("Arkansas, USA");
     dto.Items[0].Quantity.Should().Be(1);
   }
@@ -607,5 +608,219 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
 
     var body = await res.Content.ReadAsStringAsync();
     body.Should().Contain("NO_INVOICE_FOR_OPEN_BOX");
+  }
+
+  [Fact]
+  public async Task Shipping_invoice_detail_by_id_returns_owned_invoice()
+  {
+    await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
+
+    var userId = Guid.NewGuid();
+    var now = DateTimeOffset.UtcNow;
+    var invoiceId = Guid.NewGuid();
+
+    await using (var scope = factory.Services.CreateAsyncScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var mineralId = Guid.NewGuid();
+      var listingId = Guid.NewGuid();
+      var orderId = Guid.NewGuid();
+      var groupId = Guid.NewGuid();
+
+      db.Users.Add(new User
+      {
+        Id = userId,
+        Email = "ship_invoice_detail_by_id@example.com",
+        EmailVerified = true,
+        Role = UserRoles.User,
+        CreatedAt = now.UtcDateTime,
+        UpdatedAt = now.UtcDateTime
+      });
+
+      db.Minerals.Add(new Mineral
+      {
+        Id = mineralId,
+        Name = "Quartz",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.Listings.Add(new Listing
+      {
+        Id = listingId,
+        Title = "Quartz Cluster",
+        Description = "Specific invoice detail",
+        Status = "PUBLISHED",
+        PrimaryMineralId = mineralId,
+        LocalityDisplay = "Arkansas, USA",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.ListingMedia.Add(new ListingMedia
+      {
+        Id = Guid.NewGuid(),
+        ListingId = listingId,
+        Url = "https://cdn.example.com/quartz.jpg",
+        Status = ListingMediaStatuses.Ready,
+        MediaType = "IMAGE",
+        IsPrimary = true,
+        SortOrder = 0,
+        ContentLengthBytes = 123,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.FulfillmentGroups.Add(new FulfillmentGroup
+      {
+        Id = groupId,
+        UserId = userId,
+        Status = "READY_TO_FULFILL",
+        BoxStatus = "CLOSED",
+        ClosedAt = now,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.Orders.Add(new Order
+      {
+        Id = orderId,
+        UserId = userId,
+        OrderNumber = "MK-20260404-SHIP01",
+        SourceType = "STORE",
+        Status = "READY_TO_FULFILL",
+        PaidAt = now,
+        CurrencyCode = "USD",
+        SubtotalCents = 11000,
+        DiscountTotalCents = 0,
+        TotalCents = 11000,
+        FulfillmentGroupId = groupId,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.OrderLines.Add(new OrderLine
+      {
+        Id = Guid.NewGuid(),
+        OrderId = orderId,
+        OfferId = null,
+        ListingId = listingId,
+        Quantity = 1,
+        UnitPriceCents = 11000,
+        UnitDiscountCents = 0,
+        UnitFinalPriceCents = 11000,
+        LineSubtotalCents = 11000,
+        LineDiscountCents = 0,
+        LineTotalCents = 11000,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.ShippingInvoices.Add(new ShippingInvoice
+      {
+        Id = invoiceId,
+        FulfillmentGroupId = groupId,
+        AmountCents = 599,
+        CalculatedAmountCents = 599,
+        CurrencyCode = "USD",
+        Status = "UNPAID",
+        Provider = "STRIPE",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      await db.SaveChangesAsync();
+    }
+
+    using var client = factory.CreateClient();
+    AsUser(client, userId, UserRoles.User);
+
+    var res = await client.GetAsync($"/api/shipping-invoices/{invoiceId}");
+    res.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    var dto = await res.Content.ReadFromJsonAsync<ShippingInvoiceDetailDto>();
+    dto.Should().NotBeNull();
+
+    dto!.ShippingInvoiceId.Should().Be(invoiceId);
+    dto.AmountCents.Should().Be(599);
+    dto.Status.Should().Be("UNPAID");
+    dto.ItemCount.Should().Be(1);
+    dto.PreviewTitle.Should().Be("Quartz Cluster");
+    dto.Items.Should().HaveCount(1);
+    dto.RelatedOrders.Should().HaveCount(1);
+  }
+
+  [Fact]
+  public async Task Shipping_invoice_detail_by_id_returns_not_found_for_other_user()
+  {
+    await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
+
+    var ownerUserId = Guid.NewGuid();
+    var otherUserId = Guid.NewGuid();
+    var now = DateTimeOffset.UtcNow;
+    var invoiceId = Guid.NewGuid();
+
+    await using (var scope = factory.Services.CreateAsyncScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var groupId = Guid.NewGuid();
+
+      db.Users.AddRange(
+        new User
+        {
+          Id = ownerUserId,
+          Email = "ship_invoice_owner@example.com",
+          EmailVerified = true,
+          Role = UserRoles.User,
+          CreatedAt = now.UtcDateTime,
+          UpdatedAt = now.UtcDateTime
+        },
+        new User
+        {
+          Id = otherUserId,
+          Email = "ship_invoice_other@example.com",
+          EmailVerified = true,
+          Role = UserRoles.User,
+          CreatedAt = now.UtcDateTime,
+          UpdatedAt = now.UtcDateTime
+        });
+
+      db.FulfillmentGroups.Add(new FulfillmentGroup
+      {
+        Id = groupId,
+        UserId = ownerUserId,
+        Status = "READY_TO_FULFILL",
+        BoxStatus = "CLOSED",
+        ClosedAt = now,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      db.ShippingInvoices.Add(new ShippingInvoice
+      {
+        Id = invoiceId,
+        FulfillmentGroupId = groupId,
+        AmountCents = 599,
+        CalculatedAmountCents = 599,
+        CurrencyCode = "USD",
+        Status = "UNPAID",
+        Provider = "STRIPE",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      await db.SaveChangesAsync();
+    }
+
+    using var client = factory.CreateClient();
+    AsUser(client, otherUserId, UserRoles.User);
+
+    var res = await client.GetAsync($"/api/shipping-invoices/{invoiceId}");
+    res.StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+    var body = await res.Content.ReadAsStringAsync();
+    body.Should().Contain("INVOICE_NOT_FOUND");
   }
 }

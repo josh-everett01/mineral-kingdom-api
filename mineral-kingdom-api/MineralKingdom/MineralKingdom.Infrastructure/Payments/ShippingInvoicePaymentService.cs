@@ -341,4 +341,45 @@ public sealed class ShippingInvoicePaymentService
 
     return (true, null, detail);
   }
+
+  public async Task<(bool Ok, string? Error, CreateShippingInvoicePaymentRedirectResult? Result)> StartForInvoiceAsync(
+  Guid invoiceId,
+  Guid userId,
+  string provider,
+  string successUrl,
+  string cancelUrl,
+  DateTimeOffset now,
+  CancellationToken ct)
+  {
+    var invoice = await _db.ShippingInvoices
+      .SingleOrDefaultAsync(i => i.Id == invoiceId, ct);
+
+    if (invoice is null)
+      return (false, "INVOICE_NOT_FOUND", null);
+
+    var group = await _db.FulfillmentGroups
+      .AsNoTracking()
+      .SingleOrDefaultAsync(g => g.Id == invoice.FulfillmentGroupId, ct);
+
+    if (group is null)
+      return (false, "INVOICE_NOT_FOUND", null);
+
+    if (group.UserId != userId)
+      return (false, "FORBIDDEN", null);
+
+    if (string.Equals(invoice.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+      return (false, "INVOICE_ALREADY_PAID", null);
+
+    if (!string.Equals(invoice.Status, "UNPAID", StringComparison.OrdinalIgnoreCase))
+      return (false, "INVALID_INVOICE_STATUS", null);
+
+    return await StartAsync(
+      userId,
+      invoice.FulfillmentGroupId,
+      provider,
+      successUrl,
+      cancelUrl,
+      now,
+      ct);
+  }
 }

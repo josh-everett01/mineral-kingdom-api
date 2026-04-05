@@ -164,15 +164,9 @@ public sealed class PaymentWebhookService
     }
 
     // 2) ORDER payment flow (AUCTION)
-    if (orderPaymentId is not null || !string.IsNullOrWhiteSpace(sessionId))
+    if (orderPaymentId is not null)
     {
-      OrderPayment? op = null;
-
-      if (orderPaymentId.HasValue)
-        op = await _db.OrderPayments.SingleOrDefaultAsync(x => x.Id == orderPaymentId.Value, ct);
-
-      if (op is null && !string.IsNullOrWhiteSpace(sessionId))
-        op = await _db.OrderPayments.SingleOrDefaultAsync(x => x.Provider == PaymentProviders.Stripe && x.ProviderCheckoutId == sessionId, ct);
+      var op = await _db.OrderPayments.SingleOrDefaultAsync(x => x.Id == orderPaymentId.Value, ct);
 
       if (op is null)
       {
@@ -192,6 +186,32 @@ public sealed class PaymentWebhookService
       evt.ProcessedAt = now;
       await _db.SaveChangesAsync(ct);
       return;
+    }
+
+    if (!string.IsNullOrWhiteSpace(sessionId))
+    {
+      var opBySession = await _db.OrderPayments.SingleOrDefaultAsync(
+        x => x.Provider == PaymentProviders.Stripe && x.ProviderCheckoutId == sessionId,
+        ct);
+
+      if (opBySession is not null)
+      {
+        opBySession.ProviderCheckoutId ??= sessionId;
+        opBySession.ProviderPaymentId = paymentIntent ?? opBySession.ProviderPaymentId;
+        opBySession.Status = CheckoutPaymentStatuses.Succeeded;
+        opBySession.UpdatedAt = now;
+        evt.OrderPaymentId = opBySession.Id;
+
+        await ConfirmAuctionOrderPaidAsync(
+          opBySession.OrderId,
+          paymentIntent ?? sessionId ?? eventId,
+          now,
+          ct);
+
+        evt.ProcessedAt = now;
+        await _db.SaveChangesAsync(ct);
+        return;
+      }
     }
 
     // 3) SHIPPING INVOICE flow

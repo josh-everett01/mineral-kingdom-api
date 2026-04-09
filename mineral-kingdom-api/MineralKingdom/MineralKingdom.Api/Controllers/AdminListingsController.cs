@@ -272,6 +272,37 @@ public sealed class AdminListingsController : ControllerBase
     return Ok(dto);
   }
 
+  [HttpGet("minerals")]
+  [HttpGet("minerals/lookup")]
+  public async Task<ActionResult<IReadOnlyList<AdminMineralLookupItemDto>>> LookupMinerals(
+  [FromQuery(Name = "query")] string? query,
+  [FromQuery(Name = "q")] string? q,
+  CancellationToken ct)
+  {
+    var rawQuery = string.IsNullOrWhiteSpace(query) ? q : query;
+    var normalizedQuery = rawQuery?.Trim();
+
+    if (string.IsNullOrWhiteSpace(normalizedQuery))
+    {
+      return Ok(Array.Empty<AdminMineralLookupItemDto>());
+    }
+
+    var lowered = normalizedQuery.ToLowerInvariant();
+
+    var items = await _db.Minerals
+      .AsNoTracking()
+      .Where(x => x.Name.ToLower().Contains(lowered))
+      .OrderBy(x => x.Name)
+      .Take(20)
+      .Select(x => new AdminMineralLookupItemDto(
+        x.Id,
+        x.Name
+      ))
+      .ToListAsync(ct);
+
+    return Ok(items);
+  }
+
   [HttpPost]
   public async Task<ActionResult<ListingIdResponse>> Create([FromBody] CreateListingRequest req, CancellationToken ct)
   {

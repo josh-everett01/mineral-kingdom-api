@@ -117,4 +117,56 @@ public sealed class AdminListingMediaController : ControllerBase
     var raw = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
     return Guid.TryParse(raw, out actorId);
   }
+
+  [HttpGet]
+  public async Task<ActionResult<IReadOnlyList<AdminListingMediaItemDto>>> List(
+  Guid listingId,
+  CancellationToken ct)
+  {
+    var listingExists = await _db.Listings
+      .AsNoTracking()
+      .AnyAsync(x => x.Id == listingId, ct);
+
+    if (!listingExists)
+      return NotFound(new { error = "LISTING_NOT_FOUND" });
+
+    var items = await _db.ListingMedia
+      .AsNoTracking()
+      .Where(x => x.ListingId == listingId && x.DeletedAt == null)
+      .OrderByDescending(x => x.IsPrimary)
+      .ThenBy(x => x.SortOrder)
+      .ThenBy(x => x.CreatedAt)
+      .Select(x => new AdminListingMediaItemDto(
+        x.Id,
+        x.MediaType,
+        x.Status,
+        x.Url,
+        x.IsPrimary,
+        x.SortOrder,
+        x.Caption,
+        x.OriginalFileName,
+        x.ContentType,
+        x.ContentLengthBytes,
+        x.CreatedAt,
+        x.UpdatedAt
+      ))
+      .ToListAsync(ct);
+
+    return Ok(items);
+  }
+
+  public sealed record AdminListingMediaItemDto(
+    Guid Id,
+    string MediaType,
+    string Status,
+    string Url,
+    bool IsPrimary,
+    int SortOrder,
+    string? Caption,
+    string? OriginalFileName,
+    string? ContentType,
+    long? ContentLengthBytes,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt
+  );
 }

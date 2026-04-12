@@ -60,20 +60,23 @@ public sealed class HomeSectionsController : ControllerBase
       .ToListAsync(ct);
 
     var offerBackedListings = offerBackedListingsRows
-      .Select(x => new
-      {
-        x.Id,
-        x.Title,
-        x.PublishedAt,
-        x.CreatedAt,
-        OfferPriceCents = x.PriceCents,
-        EffectivePriceCents = MineralKingdom.Contracts.Store.DiscountPricing.ComputeEffectivePriceCents(
-          x.PriceCents,
-          x.DiscountType,
-          x.DiscountCents,
-          x.DiscountPercentBps)
-      })
-      .ToList();
+  .Select(x => new
+  {
+    x.Id,
+    x.Title,
+    x.PublishedAt,
+    x.CreatedAt,
+    OfferPriceCents = x.PriceCents,
+    x.DiscountType,
+    x.DiscountCents,
+    x.DiscountPercentBps,
+    EffectivePriceCents = MineralKingdom.Contracts.Store.DiscountPricing.ComputeEffectivePriceCents(
+      x.PriceCents,
+      x.DiscountType,
+      x.DiscountCents,
+      x.DiscountPercentBps)
+  })
+  .ToList();
 
     var listingIds = offerBackedListings.Select(x => x.Id).Distinct().ToList();
 
@@ -92,36 +95,42 @@ public sealed class HomeSectionsController : ControllerBase
       );
 
     var featuredListings = offerBackedListings
-      .OrderByDescending(x => x.PublishedAt ?? x.CreatedAt)
-      .Take(featuredLimit)
-      .Select(x => new HomeSectionItemDto(
-        ListingId: x.Id,
-        AuctionId: null,
-        Title: x.Title ?? "Untitled listing",
-        PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.Id),
-        PriceCents: x.OfferPriceCents,
-        EffectivePriceCents: x.EffectivePriceCents,
-        CurrentBidCents: null,
-        EndsAt: null,
-        Href: PublicListingLinks.BuildHref(x.Id, x.Title)
-      ))
-      .ToList();
+  .OrderByDescending(x => x.PublishedAt ?? x.CreatedAt)
+  .Take(featuredLimit)
+  .Select(x => new HomeSectionItemDto(
+    ListingId: x.Id,
+    AuctionId: null,
+    Title: x.Title ?? "Untitled listing",
+    PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.Id),
+    PriceCents: x.OfferPriceCents,
+    EffectivePriceCents: x.EffectivePriceCents,
+    CurrentBidCents: null,
+    EndsAt: null,
+    Href: PublicListingLinks.BuildHref(x.Id, x.Title),
+    DiscountType: x.DiscountType,
+    DiscountCents: x.DiscountCents,
+    DiscountPercentBps: x.DiscountPercentBps
+  ))
+  .ToList();
 
     var newArrivals = offerBackedListings
-      .OrderByDescending(x => x.PublishedAt ?? x.CreatedAt)
-      .Take(newArrivalsLimit)
-      .Select(x => new HomeSectionItemDto(
-        ListingId: x.Id,
-        AuctionId: null,
-        Title: x.Title ?? "Untitled listing",
-        PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.Id),
-        PriceCents: x.OfferPriceCents,
-        EffectivePriceCents: x.EffectivePriceCents,
-        CurrentBidCents: null,
-        EndsAt: null,
-        Href: PublicListingLinks.BuildHref(x.Id, x.Title)
-      ))
-      .ToList();
+  .OrderByDescending(x => x.PublishedAt ?? x.CreatedAt)
+  .Take(newArrivalsLimit)
+  .Select(x => new HomeSectionItemDto(
+    ListingId: x.Id,
+    AuctionId: null,
+    Title: x.Title ?? "Untitled listing",
+    PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.Id),
+    PriceCents: x.OfferPriceCents,
+    EffectivePriceCents: x.EffectivePriceCents,
+    CurrentBidCents: null,
+    EndsAt: null,
+    Href: PublicListingLinks.BuildHref(x.Id, x.Title),
+    DiscountType: x.DiscountType,
+    DiscountCents: x.DiscountCents,
+    DiscountPercentBps: x.DiscountPercentBps
+  ))
+  .ToList();
 
     var endingSoonRows = await (
       from auction in _db.Auctions.AsNoTracking()
@@ -140,18 +149,21 @@ public sealed class HomeSectionsController : ControllerBase
       .ToListAsync(ct);
 
     var endingSoonAuctions = endingSoonRows
-      .Select(x => new HomeSectionItemDto(
-        ListingId: x.ListingId,
-        AuctionId: x.AuctionId,
-        Title: x.Title ?? "Untitled auction",
-        PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.ListingId),
-        PriceCents: null,
-        EffectivePriceCents: null,
-        CurrentBidCents: x.CurrentPriceCents,
-        EndsAt: x.EffectiveEnd,
-        Href: $"/auctions/{x.AuctionId}"
-      ))
-      .ToList();
+  .Select(x => new HomeSectionItemDto(
+    ListingId: x.ListingId,
+    AuctionId: x.AuctionId,
+    Title: x.Title ?? "Untitled auction",
+    PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.ListingId),
+    PriceCents: null,
+    EffectivePriceCents: null,
+    CurrentBidCents: x.CurrentPriceCents,
+    EndsAt: x.EffectiveEnd,
+    Href: $"/auctions/{x.AuctionId}",
+    DiscountType: null,
+    DiscountCents: null,
+    DiscountPercentBps: null
+  ))
+  .ToList();
 
     var dto = new HomeSectionsDto(
       FeaturedListings: new HomeSectionDto(

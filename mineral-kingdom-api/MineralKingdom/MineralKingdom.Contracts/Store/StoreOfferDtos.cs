@@ -27,3 +27,30 @@ public sealed record UpsertStoreOfferRequest(
 );
 
 public sealed record StoreOfferIdResponse(Guid Id);
+
+public sealed record AdminStoreOfferListItemDto(
+  Guid Id,
+  Guid ListingId,
+  string? ListingTitle,
+  string ListingStatus,
+  int PriceCents,
+  string DiscountType,
+  int? DiscountCents,
+  int? DiscountPercentBps,
+  bool IsActive,
+  DateTimeOffset? StartsAt,
+  DateTimeOffset? EndsAt,
+  int EffectivePriceCents,
+  DateTimeOffset CreatedAt,
+  DateTimeOffset UpdatedAt
+);
+
+public sealed record UpdateStoreOfferRequest(
+  int PriceCents,
+  string DiscountType,
+  int? DiscountCents,
+  int? DiscountPercentBps,
+  bool IsActive,
+  DateTimeOffset? StartsAt,
+  DateTimeOffset? EndsAt
+);

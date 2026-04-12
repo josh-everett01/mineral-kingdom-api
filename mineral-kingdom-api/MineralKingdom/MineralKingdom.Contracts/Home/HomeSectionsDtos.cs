@@ -22,5 +22,8 @@ public sealed record HomeSectionItemDto(
   int? EffectivePriceCents,
   int? CurrentBidCents,
   DateTimeOffset? EndsAt,
-  string Href
+  string Href,
+  string? DiscountType,
+  int? DiscountCents,
+  int? DiscountPercentBps
 );

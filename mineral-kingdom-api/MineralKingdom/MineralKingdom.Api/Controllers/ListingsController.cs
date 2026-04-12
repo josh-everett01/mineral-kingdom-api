@@ -18,22 +18,25 @@ public sealed class ListingsController : ControllerBase
   public ListingsController(MineralKingdomDbContext db) => _db = db;
 
   private sealed record BrowseRow(
-    Guid Id,
-    string Title,
-    string Slug,
-    string Href,
-    string? PrimaryImageUrl,
-    string? PrimaryMineral,
-    string? LocalityDisplay,
-    string? SizeClass,
-    bool IsFluorescent,
-    string ListingType,
-    int? PriceCents,
-    int? EffectivePriceCents,
-    int? CurrentBidCents,
-    DateTimeOffset? EndsAt,
-    DateTimeOffset? PublishedAt,
-    DateTimeOffset CreatedAt);
+  Guid Id,
+  string Title,
+  string Slug,
+  string Href,
+  string? PrimaryImageUrl,
+  string? PrimaryMineral,
+  string? LocalityDisplay,
+  string? SizeClass,
+  bool IsFluorescent,
+  string ListingType,
+  int? PriceCents,
+  int? EffectivePriceCents,
+  string? DiscountType,
+  int? DiscountCents,
+  int? DiscountPercentBps,
+  int? CurrentBidCents,
+  DateTimeOffset? EndsAt,
+  DateTimeOffset? PublishedAt,
+  DateTimeOffset CreatedAt);
 
   public sealed record MediaDto(
     Guid Id,
@@ -183,22 +186,25 @@ public sealed class ListingsController : ControllerBase
         var title = listing.Title ?? "Untitled listing";
 
         return new BrowseRow(
-          Id: listing.Id,
-          Title: title,
-          Slug: PublicListingLinks.BuildSlug(title),
-          Href: PublicListingLinks.BuildHref(listing.Id, title),
-          PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(listing.Id),
-          PrimaryMineral: listing.PrimaryMineral,
-          LocalityDisplay: listing.LocalityDisplay,
-          SizeClass: listing.SizeClass,
-          IsFluorescent: listing.IsFluorescent,
-          ListingType: resolvedListingType,
-          PriceCents: priceCents,
-          EffectivePriceCents: effectivePriceCents,
-          CurrentBidCents: hasAuction ? auction!.CurrentPriceCents : null,
-          EndsAt: hasAuction ? auction!.EndsAt : null,
-          PublishedAt: listing.PublishedAt,
-          CreatedAt: listing.CreatedAt);
+  Id: listing.Id,
+  Title: title,
+  Slug: PublicListingLinks.BuildSlug(title),
+  Href: PublicListingLinks.BuildHref(listing.Id, title),
+  PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(listing.Id),
+  PrimaryMineral: listing.PrimaryMineral,
+  LocalityDisplay: listing.LocalityDisplay,
+  SizeClass: listing.SizeClass,
+  IsFluorescent: listing.IsFluorescent,
+  ListingType: resolvedListingType,
+  PriceCents: priceCents,
+  EffectivePriceCents: effectivePriceCents,
+  DiscountType: hasStore ? offer!.DiscountType : null,
+  DiscountCents: hasStore ? offer!.DiscountCents : null,
+  DiscountPercentBps: hasStore ? offer!.DiscountPercentBps : null,
+  CurrentBidCents: hasAuction ? auction!.CurrentPriceCents : null,
+  EndsAt: hasAuction ? auction!.EndsAt : null,
+  PublishedAt: listing.PublishedAt,
+  CreatedAt: listing.CreatedAt);
       })
       .Where(x => x is not null)
       .Cast<BrowseRow>()
@@ -385,21 +391,24 @@ public sealed class ListingsController : ControllerBase
   }
 
   private static ListingBrowseItemDto MapToBrowseItem(BrowseRow row)
-    => new(
-      Id: row.Id,
-      Slug: row.Slug,
-      Href: row.Href,
-      Title: row.Title,
-      PrimaryImageUrl: row.PrimaryImageUrl,
-      PrimaryMineral: row.PrimaryMineral,
-      LocalityDisplay: row.LocalityDisplay,
-      SizeClass: row.SizeClass,
-      IsFluorescent: row.IsFluorescent,
-      ListingType: row.ListingType,
-      PriceCents: row.PriceCents,
-      EffectivePriceCents: row.EffectivePriceCents,
-      CurrentBidCents: row.CurrentBidCents,
-      EndsAt: row.EndsAt);
+  => new(
+    Id: row.Id,
+    Slug: row.Slug,
+    Href: row.Href,
+    Title: row.Title,
+    PrimaryImageUrl: row.PrimaryImageUrl,
+    PrimaryMineral: row.PrimaryMineral,
+    LocalityDisplay: row.LocalityDisplay,
+    SizeClass: row.SizeClass,
+    IsFluorescent: row.IsFluorescent,
+    ListingType: row.ListingType,
+    PriceCents: row.PriceCents,
+    EffectivePriceCents: row.EffectivePriceCents,
+    CurrentBidCents: row.CurrentBidCents,
+    EndsAt: row.EndsAt,
+    DiscountType: row.DiscountType,
+    DiscountCents: row.DiscountCents,
+    DiscountPercentBps: row.DiscountPercentBps);
 
   private static long GetComparableRecencyTicks(BrowseRow item)
     => (item.PublishedAt ?? item.CreatedAt).UtcDateTime.Ticks;

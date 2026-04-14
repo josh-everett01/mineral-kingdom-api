@@ -49,4 +49,5 @@ public static class OptionalEmailKeys
   public const string BidAccepted = "BID_ACCEPTED";
   public const string AuctionPaymentReminders = "AUCTION_PAYMENT_REMINDERS";
   public const string ShippingInvoiceReminders = "SHIPPING_INVOICE_REMINDERS";
+  public const string OrderRefund = "order_refund";
 }

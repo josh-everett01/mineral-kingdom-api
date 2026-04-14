@@ -8,4 +8,6 @@ public static class EmailTemplateKeys
   public const string ShippingInvoicePaid = "SHIPPING_INVOICE_PAID";
   public const string ShipmentConfirmed = "SHIPMENT_CONFIRMED";
   public const string Outbid = "OUTBID";
+  public const string OrderRefunded = "ORDER_REFUNDED";
+  public const string OrderRefundedPartial = "ORDER_REFUNDED_PARTIAL";
 }

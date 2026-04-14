@@ -18,7 +18,7 @@ public sealed class AuctionBrowseApiTests : IClassFixture<PostgresContainerFixtu
   public AuctionBrowseApiTests(PostgresContainerFixture pg) => _pg = pg;
 
   [Fact]
-  public async Task Get_auctions_returns_public_live_and_closing_auctions_sorted_by_closing_time()
+  public async Task Get_auctions_returns_public_live_closing_and_scheduled_auctions()
   {
     await using var factory = NewFactory();
     await MigrateAsync(factory);
@@ -64,6 +64,22 @@ public sealed class AuctionBrowseApiTests : IClassFixture<PostgresContainerFixtu
       var listing3 = new Listing
       {
         Id = Guid.NewGuid(),
+        Title = "Upcoming Vanadinite",
+        Description = "Test",
+        Status = ListingStatuses.Published,
+        LocalityDisplay = "Mibladen, Morocco",
+        SizeClass = "MINIATURE",
+        IsFluorescent = false,
+        QuantityAvailable = 1,
+        QuantityTotal = 1,
+        CreatedAt = now,
+        UpdatedAt = now,
+        PublishedAt = now
+      };
+
+      var listing4 = new Listing
+      {
+        Id = Guid.NewGuid(),
         Title = "Hidden Draft Auction",
         Description = "Test",
         Status = ListingStatuses.Published,
@@ -74,21 +90,35 @@ public sealed class AuctionBrowseApiTests : IClassFixture<PostgresContainerFixtu
         PublishedAt = now
       };
 
-      db.Listings.AddRange(listing1, listing2, listing3);
+      db.Listings.AddRange(listing1, listing2, listing3, listing4);
 
-      db.ListingMedia.Add(new ListingMedia
-      {
-        Id = Guid.NewGuid(),
-        ListingId = listing1.Id,
-        Url = "https://example.com/rainbow.jpg",
-        ContentLengthBytes = 1234,
-        SortOrder = 0,
-        IsPrimary = true,
-        MediaType = ListingMediaTypes.Image,
-        Status = ListingMediaStatuses.Ready,
-        CreatedAt = now,
-        UpdatedAt = now
-      });
+      db.ListingMedia.AddRange(
+        new ListingMedia
+        {
+          Id = Guid.NewGuid(),
+          ListingId = listing1.Id,
+          Url = "https://example.com/rainbow.jpg",
+          ContentLengthBytes = 1234,
+          SortOrder = 0,
+          IsPrimary = true,
+          MediaType = ListingMediaTypes.Image,
+          Status = ListingMediaStatuses.Ready,
+          CreatedAt = now,
+          UpdatedAt = now
+        },
+        new ListingMedia
+        {
+          Id = Guid.NewGuid(),
+          ListingId = listing3.Id,
+          Url = "https://example.com/vanadinite.jpg",
+          ContentLengthBytes = 1234,
+          SortOrder = 0,
+          IsPrimary = true,
+          MediaType = ListingMediaTypes.Image,
+          Status = ListingMediaStatuses.Ready,
+          CreatedAt = now,
+          UpdatedAt = now
+        });
 
       db.Auctions.AddRange(
         new Auction
@@ -131,11 +161,29 @@ public sealed class AuctionBrowseApiTests : IClassFixture<PostgresContainerFixtu
         {
           Id = Guid.NewGuid(),
           ListingId = listing3.Id,
-          Status = "DRAFT",
+          Status = AuctionStatuses.Scheduled,
+          StartingPriceCents = 18000,
+          ReservePriceCents = null,
+          StartTime = now.AddDays(1),
+          CloseTime = now.AddDays(4),
+          ClosingWindowEnd = null,
+          CurrentPriceCents = 18000,
+          CurrentLeaderUserId = null,
+          CurrentLeaderMaxCents = null,
+          BidCount = 0,
+          ReserveMet = false,
+          CreatedAt = now,
+          UpdatedAt = now
+        },
+        new Auction
+        {
+          Id = Guid.NewGuid(),
+          ListingId = listing4.Id,
+          Status = AuctionStatuses.Draft,
           StartingPriceCents = 30000,
           ReservePriceCents = null,
-          StartTime = now.AddHours(-1),
-          CloseTime = now.AddHours(1),
+          StartTime = now.AddHours(1),
+          CloseTime = now.AddHours(6),
           ClosingWindowEnd = null,
           CurrentPriceCents = 30000,
           CurrentLeaderUserId = null,
@@ -156,20 +204,31 @@ public sealed class AuctionBrowseApiTests : IClassFixture<PostgresContainerFixtu
 
     var body = await response.Content.ReadFromJsonAsync<AuctionBrowseResponseDto>();
     body.Should().NotBeNull();
-    body!.Items.Should().HaveCount(2);
-    body.Total.Should().Be(2);
+    body!.Items.Should().HaveCount(3);
+    body.Total.Should().Be(3);
 
-    body.Items[0].Title.Should().Be("Rainbow Fluorite Tower");
-    body.Items[0].PrimaryImageUrl.Should().Be("https://example.com/rainbow.jpg");
-    body.Items[0].CurrentPriceCents.Should().Be(12500);
-    body.Items[0].BidCount.Should().Be(3);
-    body.Items[0].Status.Should().Be(AuctionStatuses.Closing);
+    body.Items.Should().Contain(x => x.Title == "Rainbow Fluorite Tower" && x.Status == AuctionStatuses.Closing);
+    body.Items.Should().Contain(x => x.Title == "Amethyst Cathedral" && x.Status == AuctionStatuses.Live);
+    body.Items.Should().Contain(x => x.Title == "Upcoming Vanadinite" && x.Status == AuctionStatuses.Scheduled);
 
-    body.Items[1].Title.Should().Be("Amethyst Cathedral");
-    body.Items[1].Status.Should().Be(AuctionStatuses.Live);
+    var closingItem = body.Items.Single(x => x.Title == "Rainbow Fluorite Tower");
+    closingItem.PrimaryImageUrl.Should().Be("https://example.com/rainbow.jpg");
+    closingItem.CurrentPriceCents.Should().Be(12500);
+    closingItem.StartingPriceCents.Should().Be(10000);
+    closingItem.BidCount.Should().Be(3);
+
+    var scheduledItem = body.Items.Single(x => x.Title == "Upcoming Vanadinite");
+    scheduledItem.PrimaryImageUrl.Should().Be("https://example.com/vanadinite.jpg");
+    scheduledItem.CurrentPriceCents.Should().Be(18000);
+    scheduledItem.StartingPriceCents.Should().Be(18000);
+    scheduledItem.BidCount.Should().Be(0);
+    scheduledItem.StartTimeUtc.Should().NotBeNull();
+    scheduledItem.Status.Should().Be(AuctionStatuses.Scheduled);
 
     body.Items.Select(x => x.Status).Should().OnlyContain(x =>
-      x == AuctionStatuses.Live || x == AuctionStatuses.Closing);
+      x == AuctionStatuses.Live ||
+      x == AuctionStatuses.Closing ||
+      x == AuctionStatuses.Scheduled);
   }
 
   [Fact]
@@ -177,6 +236,7 @@ public sealed class AuctionBrowseApiTests : IClassFixture<PostgresContainerFixtu
   {
     await using var factory = NewFactory();
     await MigrateAsync(factory);
+    await ClearAuctionBrowseDataAsync(factory);
 
     using var client = factory.CreateClient();
 
@@ -197,5 +257,17 @@ public sealed class AuctionBrowseApiTests : IClassFixture<PostgresContainerFixtu
     using var scope = factory.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
     await db.Database.MigrateAsync();
+  }
+
+  private static async Task ClearAuctionBrowseDataAsync(TestAppFactory factory)
+  {
+    using var scope = factory.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+    db.ListingMedia.RemoveRange(db.ListingMedia);
+    db.Auctions.RemoveRange(db.Auctions);
+    db.Listings.RemoveRange(db.Listings);
+
+    await db.SaveChangesAsync();
   }
 }

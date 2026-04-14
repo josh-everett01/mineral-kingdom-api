@@ -52,6 +52,18 @@ public sealed class TestingE2ESeedController : ControllerBase
     var auctionMediaId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2");
     var auctionId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3");
 
+    var adminAuctionDraftListingId = Guid.Parse("cccccccc-cccc-cccc-cccc-ccccccccccc1");
+    var adminAuctionDraftMediaId = Guid.Parse("cccccccc-cccc-cccc-cccc-ccccccccccc2");
+    const string adminAuctionDraftListingTitle = "Admin Auction Draft Fixture";
+
+    var adminAuctionScheduledListingId = Guid.Parse("dddddddd-dddd-dddd-dddd-ddddddddddd1");
+    var adminAuctionScheduledMediaId = Guid.Parse("dddddddd-dddd-dddd-dddd-ddddddddddd2");
+    const string adminAuctionScheduledListingTitle = "Admin Auction Scheduled Fixture";
+
+    var adminAuctionLiveListingId = Guid.Parse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee1");
+    var adminAuctionLiveMediaId = Guid.Parse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee2");
+    const string adminAuctionLiveListingTitle = "Admin Auction Live Fixture";
+
     await UpsertMineralAsync(
       fluoriteMineralId,
       "Smoke Fluorite E2E",
@@ -365,6 +377,174 @@ public sealed class TestingE2ESeedController : ControllerBase
       },
       ct);
 
+    await UpsertListingAsync(
+      new Listing
+      {
+        Id = adminAuctionDraftListingId,
+        Title = adminAuctionDraftListingTitle,
+        Description = "Deterministic E2E admin auction draft fixture.",
+        Status = ListingStatuses.Published,
+        PrimaryMineralId = fluoriteMineralId,
+        LocalityDisplay = "Naica, Chihuahua, Mexico",
+        CountryCode = "MX",
+        AdminArea1 = "Chihuahua",
+        MineName = "Naica Mine",
+        LengthCm = 7.5m,
+        WidthCm = 4.0m,
+        HeightCm = 3.0m,
+        WeightGrams = 390,
+        SizeClass = "SMALL CABINET",
+        IsFluorescent = false,
+        FluorescenceNotes = null,
+        ConditionNotes = "Ready for admin auction draft testing.",
+        IsLot = false,
+        QuantityTotal = 1,
+        QuantityAvailable = 1,
+        CreatedAt = now.AddDays(-1),
+        UpdatedAt = now.AddDays(-1),
+        PublishedAt = now.AddDays(-1),
+        ArchivedAt = null
+      },
+      ct);
+
+    await UpsertListingMediaAsync(
+      new ListingMedia
+      {
+        Id = adminAuctionDraftMediaId,
+        ListingId = adminAuctionDraftListingId,
+        MediaType = ListingMediaTypes.Image,
+        Status = ListingMediaStatuses.Ready,
+        StorageKey = null,
+        OriginalFileName = "admin-auction-draft-fixture.jpg",
+        ContentType = "image/jpeg",
+        ContentLengthBytes = 180000,
+        Url = "https://images.unsplash.com/photo-1501004318641-b39e6451bec6?auto=format&fit=crop&w=1200&q=80",
+        SortOrder = 0,
+        IsPrimary = true,
+        Caption = "Admin auction draft fixture primary image",
+        CreatedAt = now.AddDays(-1),
+        UpdatedAt = now.AddDays(-1),
+        DeletedAt = null
+      },
+      ct);
+
+    await ResetAdminAuctionCreationStateAsync(
+      adminAuctionDraftListingId,
+      now,
+      ct);
+
+    await UpsertListingAsync(
+      new Listing
+      {
+        Id = adminAuctionScheduledListingId,
+        Title = adminAuctionScheduledListingTitle,
+        Description = "Deterministic E2E admin auction scheduled fixture.",
+        Status = ListingStatuses.Published,
+        PrimaryMineralId = quartzMineralId,
+        LocalityDisplay = "Tsumeb, Namibia",
+        CountryCode = "NA",
+        AdminArea1 = "Otjikoto",
+        MineName = "Tsumeb Mine",
+        LengthCm = 8.2m,
+        WidthCm = 5.3m,
+        HeightCm = 4.1m,
+        WeightGrams = 470,
+        SizeClass = "CABINET",
+        IsFluorescent = false,
+        FluorescenceNotes = null,
+        ConditionNotes = "Ready for admin auction scheduled testing.",
+        IsLot = false,
+        QuantityTotal = 1,
+        QuantityAvailable = 1,
+        CreatedAt = now.AddDays(-1),
+        UpdatedAt = now.AddDays(-1),
+        PublishedAt = now.AddDays(-1),
+        ArchivedAt = null
+      },
+      ct);
+
+    await UpsertListingMediaAsync(
+      new ListingMedia
+      {
+        Id = adminAuctionScheduledMediaId,
+        ListingId = adminAuctionScheduledListingId,
+        MediaType = ListingMediaTypes.Image,
+        Status = ListingMediaStatuses.Ready,
+        StorageKey = null,
+        OriginalFileName = "admin-auction-scheduled-fixture.jpg",
+        ContentType = "image/jpeg",
+        ContentLengthBytes = 182000,
+        Url = "https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=80",
+        SortOrder = 0,
+        IsPrimary = true,
+        Caption = "Admin auction scheduled fixture primary image",
+        CreatedAt = now.AddDays(-1),
+        UpdatedAt = now.AddDays(-1),
+        DeletedAt = null
+      },
+      ct);
+
+    await ResetAdminAuctionCreationStateAsync(
+      adminAuctionScheduledListingId,
+      now,
+      ct);
+
+    await UpsertListingAsync(
+      new Listing
+      {
+        Id = adminAuctionLiveListingId,
+        Title = adminAuctionLiveListingTitle,
+        Description = "Deterministic E2E admin auction live fixture.",
+        Status = ListingStatuses.Published,
+        PrimaryMineralId = fluoriteMineralId,
+        LocalityDisplay = "Weardale, County Durham, England",
+        CountryCode = "GB",
+        AdminArea1 = "County Durham",
+        MineName = "Rogerley Mine",
+        LengthCm = 7.9m,
+        WidthCm = 4.6m,
+        HeightCm = 3.7m,
+        WeightGrams = 410,
+        SizeClass = "SMALL CABINET",
+        IsFluorescent = true,
+        FluorescenceNotes = "Green fluorescence under LWUV.",
+        ConditionNotes = "Ready for admin auction launch-now testing.",
+        IsLot = false,
+        QuantityTotal = 1,
+        QuantityAvailable = 1,
+        CreatedAt = now.AddDays(-1),
+        UpdatedAt = now.AddDays(-1),
+        PublishedAt = now.AddDays(-1),
+        ArchivedAt = null
+      },
+      ct);
+
+    await UpsertListingMediaAsync(
+      new ListingMedia
+      {
+        Id = adminAuctionLiveMediaId,
+        ListingId = adminAuctionLiveListingId,
+        MediaType = ListingMediaTypes.Image,
+        Status = ListingMediaStatuses.Ready,
+        StorageKey = null,
+        OriginalFileName = "admin-auction-live-fixture.jpg",
+        ContentType = "image/jpeg",
+        ContentLengthBytes = 184000,
+        Url = "https://images.unsplash.com/photo-1518066000714-58c45f1a2c0a?auto=format&fit=crop&w=1200&q=80",
+        SortOrder = 0,
+        IsPrimary = true,
+        Caption = "Admin auction live fixture primary image",
+        CreatedAt = now.AddDays(-1),
+        UpdatedAt = now.AddDays(-1),
+        DeletedAt = null
+      },
+      ct);
+
+    await ResetAdminAuctionCreationStateAsync(
+      adminAuctionLiveListingId,
+      now,
+      ct);
+
     return Ok(new E2ESeedResponse(
       StoreListingId: storeListingId,
       StoreOfferId: storeOfferId,
@@ -373,7 +553,14 @@ public sealed class TestingE2ESeedController : ControllerBase
       StoreListing3Id: storeListing3Id,
       StoreOffer3Id: storeOffer3Id,
       AuctionListingId: auctionListingId,
-      AuctionId: auctionId));
+      AuctionId: auctionId,
+      AdminAuctionDraftListingId: adminAuctionDraftListingId,
+      AdminAuctionDraftListingTitle: adminAuctionDraftListingTitle,
+      AdminAuctionScheduledListingId: adminAuctionScheduledListingId,
+      AdminAuctionScheduledListingTitle: adminAuctionScheduledListingTitle,
+      AdminAuctionLiveListingId: adminAuctionLiveListingId,
+      AdminAuctionLiveListingTitle: adminAuctionLiveListingTitle
+    ));
   }
 
   private async Task UpsertMineralAsync(Guid id, string name, DateTimeOffset now, CancellationToken ct)
@@ -584,6 +771,36 @@ public sealed class TestingE2ESeedController : ControllerBase
     await _db.SaveChangesAsync(ct);
   }
 
+  private async Task ResetAdminAuctionCreationStateAsync(
+    Guid listingId,
+    DateTimeOffset now,
+    CancellationToken ct)
+  {
+    var auctions = await _db.Auctions
+      .Where(x =>
+        x.ListingId == listingId &&
+        (x.Status == AuctionStatuses.Draft ||
+         x.Status == AuctionStatuses.Scheduled ||
+         x.Status == AuctionStatuses.Live ||
+         x.Status == AuctionStatuses.Closing))
+      .ToListAsync(ct);
+
+    foreach (var auction in auctions)
+    {
+      auction.Status = AuctionStatuses.ClosedNotSold;
+      auction.UpdatedAt = now;
+      auction.CloseTime = now;
+      auction.ClosingWindowEnd = now;
+      auction.CurrentLeaderUserId = null;
+      auction.CurrentLeaderMaxCents = null;
+      auction.BidCount = 0;
+      auction.CurrentPriceCents = auction.StartingPriceCents;
+      auction.ReserveMet = false;
+    }
+
+    await _db.SaveChangesAsync(ct);
+  }
+
   public sealed record E2ESeedResponse(
     Guid StoreListingId,
     Guid StoreOfferId,
@@ -592,5 +809,12 @@ public sealed class TestingE2ESeedController : ControllerBase
     Guid StoreListing3Id,
     Guid StoreOffer3Id,
     Guid AuctionListingId,
-    Guid AuctionId);
+    Guid AuctionId,
+    Guid AdminAuctionDraftListingId,
+    string AdminAuctionDraftListingTitle,
+    Guid AdminAuctionScheduledListingId,
+    string AdminAuctionScheduledListingTitle,
+    Guid AdminAuctionLiveListingId,
+    string AdminAuctionLiveListingTitle
+  );
 }

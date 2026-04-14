@@ -772,9 +772,9 @@ public sealed class TestingE2ESeedController : ControllerBase
   }
 
   private async Task ResetAdminAuctionCreationStateAsync(
-    Guid listingId,
-    DateTimeOffset now,
-    CancellationToken ct)
+  Guid listingId,
+  DateTimeOffset now,
+  CancellationToken ct)
   {
     var auctions = await _db.Auctions
       .Where(x =>
@@ -782,7 +782,8 @@ public sealed class TestingE2ESeedController : ControllerBase
         (x.Status == AuctionStatuses.Draft ||
          x.Status == AuctionStatuses.Scheduled ||
          x.Status == AuctionStatuses.Live ||
-         x.Status == AuctionStatuses.Closing))
+         x.Status == AuctionStatuses.Closing ||
+         x.Status == AuctionStatuses.ClosedWaitingOnPayment))
       .ToListAsync(ct);
 
     foreach (var auction in auctions)

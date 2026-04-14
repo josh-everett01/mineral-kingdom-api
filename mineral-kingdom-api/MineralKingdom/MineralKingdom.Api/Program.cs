@@ -147,6 +147,7 @@ public class Program
         builder.Services.AddScoped<AuctionShippingChoiceService>();
         builder.Services.AddSingleton<MineralKingdom.Infrastructure.Orders.Realtime.OrderRealtimeHub>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Orders.Realtime.IOrderRealtimePublisher, MineralKingdom.Infrastructure.Orders.Realtime.OrderRealtimePublisher>();
+        builder.Services.AddScoped<AdminOrderQueryService>();
 
         builder.Services.AddSingleton<MineralKingdom.Infrastructure.Orders.Realtime.FulfillmentRealtimeHub>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Orders.Realtime.IFulfillmentRealtimePublisher, MineralKingdom.Infrastructure.Orders.Realtime.FulfillmentRealtimePublisher>();

@@ -43,12 +43,15 @@ public sealed class PayPalOrderRefundProvider : IOrderRefundProvider
     if (string.IsNullOrWhiteSpace(_pp.ClientId) || string.IsNullOrWhiteSpace(_pp.Secret))
       throw new InvalidOperationException("PAYPAL_NOT_CONFIGURED");
 
+    var normalizedProvider = PaymentProviders.PayPal.ToUpperInvariant();
+    var normalizedSucceededStatus = CheckoutPaymentStatuses.Succeeded.ToUpperInvariant();
+
     // Find latest paid PayPal payment for this order
     var pay = await _db.OrderPayments.AsNoTracking()
       .Where(p =>
         p.OrderId == orderId &&
-        p.Provider == PaymentProviders.PayPal &&
-        p.Status == CheckoutPaymentStatuses.Succeeded)
+        p.Provider.ToUpper() == normalizedProvider &&
+        p.Status.ToUpper() == normalizedSucceededStatus)
       .OrderByDescending(p => p.CreatedAt)
       .FirstOrDefaultAsync(ct);
 

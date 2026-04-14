@@ -25,6 +25,7 @@ public sealed class HomeSectionsController : ControllerBase
 
     const int featuredLimit = 6;
     const int auctionLimit = 6;
+    const int upcomingAuctionLimit = 6;
     const int newArrivalsLimit = 6;
 
     var activeOffers = _db.StoreOffers
@@ -60,28 +61,43 @@ public sealed class HomeSectionsController : ControllerBase
       .ToListAsync(ct);
 
     var offerBackedListings = offerBackedListingsRows
-  .Select(x => new
-  {
-    x.Id,
-    x.Title,
-    x.PublishedAt,
-    x.CreatedAt,
-    OfferPriceCents = x.PriceCents,
-    x.DiscountType,
-    x.DiscountCents,
-    x.DiscountPercentBps,
-    EffectivePriceCents = MineralKingdom.Contracts.Store.DiscountPricing.ComputeEffectivePriceCents(
-      x.PriceCents,
-      x.DiscountType,
-      x.DiscountCents,
-      x.DiscountPercentBps)
-  })
-  .ToList();
+      .Select(x => new
+      {
+        x.Id,
+        x.Title,
+        x.PublishedAt,
+        x.CreatedAt,
+        OfferPriceCents = x.PriceCents,
+        x.DiscountType,
+        x.DiscountCents,
+        x.DiscountPercentBps,
+        EffectivePriceCents = MineralKingdom.Contracts.Store.DiscountPricing.ComputeEffectivePriceCents(
+          x.PriceCents,
+          x.DiscountType,
+          x.DiscountCents,
+          x.DiscountPercentBps)
+      })
+      .ToList();
 
     var listingIds = offerBackedListings.Select(x => x.Id).Distinct().ToList();
 
+    var auctionListingIds = await _db.Auctions
+  .AsNoTracking()
+  .Where(a =>
+    a.Status == AuctionStatuses.Live ||
+    a.Status == AuctionStatuses.Closing ||
+    a.Status == AuctionStatuses.Scheduled)
+  .Select(a => a.ListingId)
+  .Distinct()
+  .ToListAsync(ct);
+
+    var combinedListingIds = listingIds
+      .Concat(auctionListingIds)
+      .Distinct()
+      .ToList();
+
     var mediaLookup = await readyMedia
-      .Where(m => listingIds.Contains(m.ListingId))
+      .Where(m => combinedListingIds.Contains(m.ListingId))
       .OrderByDescending(m => m.IsPrimary)
       .ThenBy(m => m.SortOrder)
       .Select(m => new { m.ListingId, m.Url, m.IsPrimary, m.SortOrder })
@@ -95,42 +111,48 @@ public sealed class HomeSectionsController : ControllerBase
       );
 
     var featuredListings = offerBackedListings
-  .OrderByDescending(x => x.PublishedAt ?? x.CreatedAt)
-  .Take(featuredLimit)
-  .Select(x => new HomeSectionItemDto(
-    ListingId: x.Id,
-    AuctionId: null,
-    Title: x.Title ?? "Untitled listing",
-    PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.Id),
-    PriceCents: x.OfferPriceCents,
-    EffectivePriceCents: x.EffectivePriceCents,
-    CurrentBidCents: null,
-    EndsAt: null,
-    Href: PublicListingLinks.BuildHref(x.Id, x.Title),
-    DiscountType: x.DiscountType,
-    DiscountCents: x.DiscountCents,
-    DiscountPercentBps: x.DiscountPercentBps
-  ))
-  .ToList();
+      .OrderByDescending(x => x.PublishedAt ?? x.CreatedAt)
+      .Take(featuredLimit)
+      .Select(x => new HomeSectionItemDto(
+        ListingId: x.Id,
+        AuctionId: null,
+        Title: x.Title ?? "Untitled listing",
+        PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.Id),
+        PriceCents: x.OfferPriceCents,
+        EffectivePriceCents: x.EffectivePriceCents,
+        CurrentBidCents: null,
+        StartingPriceCents: null,
+        EndsAt: null,
+        StartTime: null,
+        Status: null,
+        Href: PublicListingLinks.BuildHref(x.Id, x.Title),
+        DiscountType: x.DiscountType,
+        DiscountCents: x.DiscountCents,
+        DiscountPercentBps: x.DiscountPercentBps
+      ))
+      .ToList();
 
     var newArrivals = offerBackedListings
-  .OrderByDescending(x => x.PublishedAt ?? x.CreatedAt)
-  .Take(newArrivalsLimit)
-  .Select(x => new HomeSectionItemDto(
-    ListingId: x.Id,
-    AuctionId: null,
-    Title: x.Title ?? "Untitled listing",
-    PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.Id),
-    PriceCents: x.OfferPriceCents,
-    EffectivePriceCents: x.EffectivePriceCents,
-    CurrentBidCents: null,
-    EndsAt: null,
-    Href: PublicListingLinks.BuildHref(x.Id, x.Title),
-    DiscountType: x.DiscountType,
-    DiscountCents: x.DiscountCents,
-    DiscountPercentBps: x.DiscountPercentBps
-  ))
-  .ToList();
+      .OrderByDescending(x => x.PublishedAt ?? x.CreatedAt)
+      .Take(newArrivalsLimit)
+      .Select(x => new HomeSectionItemDto(
+        ListingId: x.Id,
+        AuctionId: null,
+        Title: x.Title ?? "Untitled listing",
+        PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.Id),
+        PriceCents: x.OfferPriceCents,
+        EffectivePriceCents: x.EffectivePriceCents,
+        CurrentBidCents: null,
+        StartingPriceCents: null,
+        EndsAt: null,
+        StartTime: null,
+        Status: null,
+        Href: PublicListingLinks.BuildHref(x.Id, x.Title),
+        DiscountType: x.DiscountType,
+        DiscountCents: x.DiscountCents,
+        DiscountPercentBps: x.DiscountPercentBps
+      ))
+      .ToList();
 
     var endingSoonRows = await (
       from auction in _db.Auctions.AsNoTracking()
@@ -142,28 +164,72 @@ public sealed class HomeSectionsController : ControllerBase
         ListingId = listing.Id,
         listing.Title,
         EffectiveEnd = auction.ClosingWindowEnd ?? auction.CloseTime,
-        auction.CurrentPriceCents
+        auction.CurrentPriceCents,
+        auction.StartingPriceCents,
+        auction.StartTime,
+        auction.Status
       })
       .OrderBy(x => x.EffectiveEnd)
       .Take(auctionLimit)
       .ToListAsync(ct);
 
     var endingSoonAuctions = endingSoonRows
-  .Select(x => new HomeSectionItemDto(
-    ListingId: x.ListingId,
-    AuctionId: x.AuctionId,
-    Title: x.Title ?? "Untitled auction",
-    PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.ListingId),
-    PriceCents: null,
-    EffectivePriceCents: null,
-    CurrentBidCents: x.CurrentPriceCents,
-    EndsAt: x.EffectiveEnd,
-    Href: $"/auctions/{x.AuctionId}",
-    DiscountType: null,
-    DiscountCents: null,
-    DiscountPercentBps: null
-  ))
-  .ToList();
+      .Select(x => new HomeSectionItemDto(
+        ListingId: x.ListingId,
+        AuctionId: x.AuctionId,
+        Title: x.Title ?? "Untitled auction",
+        PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.ListingId),
+        PriceCents: null,
+        EffectivePriceCents: null,
+        CurrentBidCents: x.CurrentPriceCents,
+        StartingPriceCents: x.StartingPriceCents,
+        EndsAt: x.EffectiveEnd,
+        StartTime: x.StartTime,
+        Status: x.Status,
+        Href: $"/auctions/{x.AuctionId}",
+        DiscountType: null,
+        DiscountCents: null,
+        DiscountPercentBps: null
+      ))
+      .ToList();
+
+    var upcomingRows = await (
+      from auction in _db.Auctions.AsNoTracking()
+      join listing in publishedListings on auction.ListingId equals listing.Id
+      where auction.Status == AuctionStatuses.Scheduled
+      select new
+      {
+        AuctionId = auction.Id,
+        ListingId = listing.Id,
+        listing.Title,
+        auction.StartTime,
+        auction.CloseTime,
+        auction.StartingPriceCents,
+        auction.Status
+      })
+      .OrderBy(x => x.StartTime)
+      .Take(upcomingAuctionLimit)
+      .ToListAsync(ct);
+
+    var upcomingAuctions = upcomingRows
+      .Select(x => new HomeSectionItemDto(
+        ListingId: x.ListingId,
+        AuctionId: x.AuctionId,
+        Title: x.Title ?? "Untitled auction",
+        PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.ListingId),
+        PriceCents: null,
+        EffectivePriceCents: null,
+        CurrentBidCents: null,
+        StartingPriceCents: x.StartingPriceCents,
+        EndsAt: x.CloseTime,
+        StartTime: x.StartTime,
+        Status: x.Status,
+        Href: $"/auctions/{x.AuctionId}",
+        DiscountType: null,
+        DiscountCents: null,
+        DiscountPercentBps: null
+      ))
+      .ToList();
 
     var dto = new HomeSectionsDto(
       FeaturedListings: new HomeSectionDto(
@@ -177,6 +243,12 @@ public sealed class HomeSectionsController : ControllerBase
         BrowseHref: "/auctions",
         Count: endingSoonAuctions.Count,
         Items: endingSoonAuctions
+      ),
+      UpcomingAuctions: new HomeSectionDto(
+        Title: "Upcoming Auctions",
+        BrowseHref: "/auctions",
+        Count: upcomingAuctions.Count,
+        Items: upcomingAuctions
       ),
       NewArrivals: new HomeSectionDto(
         Title: "New Arrivals",

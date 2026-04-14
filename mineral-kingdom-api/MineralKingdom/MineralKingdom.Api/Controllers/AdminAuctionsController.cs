@@ -31,7 +31,87 @@ public sealed class AdminAuctionsController : ControllerBase
     return Ok(new AuctionIdResponse(id!.Value));
   }
 
+  [HttpGet]
+  public async Task<ActionResult<List<AdminAuctionListItemDto>>> List(
+    [FromQuery] string? status,
+    [FromQuery] string? search,
+    CancellationToken ct)
+  {
+    var query =
+      from auction in _db.Auctions.AsNoTracking()
+      join listing in _db.Listings.AsNoTracking() on auction.ListingId equals listing.Id
+      select new
+      {
+        auction.Id,
+        auction.ListingId,
+        ListingTitle = listing.Title,
+        auction.Status,
+        auction.StartingPriceCents,
+        auction.CurrentPriceCents,
+        auction.ReservePriceCents,
+        auction.ReserveMet,
+        auction.BidCount,
+        auction.StartTime,
+        auction.CloseTime,
+        auction.ClosingWindowEnd,
+        auction.QuotedShippingCents,
+        auction.RelistOfAuctionId,
+        auction.CreatedAt,
+        auction.UpdatedAt
+      };
+
+    if (!string.IsNullOrWhiteSpace(status))
+    {
+      var normalizedStatus = status.Trim().ToUpperInvariant();
+      query = query.Where(x => x.Status == normalizedStatus);
+    }
+
+    if (!string.IsNullOrWhiteSpace(search))
+    {
+      var term = search.Trim().ToLowerInvariant();
+      query = query.Where(x => (x.ListingTitle ?? "").ToLower().Contains(term));
+    }
+
+    var rows = await query
+      .OrderByDescending(x => x.CreatedAt)
+      .ToListAsync(ct);
+
+    var result = rows
+      .Select(x => new AdminAuctionListItemDto(
+        Id: x.Id,
+        ListingId: x.ListingId,
+        ListingTitle: x.ListingTitle,
+        Status: x.Status,
+        StartingPriceCents: x.StartingPriceCents,
+        CurrentPriceCents: x.CurrentPriceCents,
+        ReservePriceCents: x.ReservePriceCents,
+        HasReserve: x.ReservePriceCents is not null,
+        ReserveMet: x.ReservePriceCents is not null ? x.ReserveMet : null,
+        BidCount: x.BidCount,
+        StartTime: x.StartTime,
+        CloseTime: x.CloseTime,
+        ClosingWindowEnd: x.ClosingWindowEnd,
+        QuotedShippingCents: x.QuotedShippingCents,
+        RelistOfAuctionId: x.RelistOfAuctionId,
+        CreatedAt: x.CreatedAt,
+        UpdatedAt: x.UpdatedAt
+      ))
+      .ToList();
+
+    return Ok(result);
+  }
+
+  [HttpPatch("{auctionId:guid}")]
+  public async Task<IActionResult> Patch([FromRoute] Guid auctionId, [FromBody] UpdateAuctionRequest req, CancellationToken ct)
+  {
+    var now = DateTimeOffset.UtcNow;
+    var (ok, err) = await _svc.UpdateAsync(auctionId, req, now, ct);
+    if (!ok) return BadRequest(new { error = err });
+    return Ok();
+  }
+
   [HttpPost("{auctionId:guid}/start")]
+  [Authorize(Policy = AuthorizationPolicies.OwnerOnly)]
   public async Task<IActionResult> Start([FromRoute] Guid auctionId, CancellationToken ct)
   {
     var now = DateTimeOffset.UtcNow;
@@ -40,201 +120,204 @@ public sealed class AdminAuctionsController : ControllerBase
     return Ok();
   }
 
-  public sealed record AdminAuctionResponse(
-  Guid Id,
-  Guid ListingId,
-  string Status,
-  int StartingPriceCents,
-  int? ReservePriceCents,
-
-  // ✅ clarity: reserve may not apply
-  bool HasReserve,
-  bool? ReserveMet,
-
-  int BidCount,
-  DateTimeOffset? StartTime,
-  DateTimeOffset CloseTime,
-  DateTimeOffset? ClosingWindowEnd,
-  Guid? RelistOfAuctionId,
-  DateTimeOffset CreatedAt,
-  DateTimeOffset UpdatedAt,
-
-  // ✅ server time (source of truth for due calculations)
-  DateTimeOffset ServerTimeUtc,
-
-  // ✅ due helpers (computed relative to ServerTimeUtc)
-  bool IsCloseDue,
-  int SecondsUntilCloseDue,
-
-  bool IsClosingWindowDue,
-  int? SecondsUntilClosingWindowDue,
-
-  bool IsRelistDue,
-  int SecondsUntilRelistDue
-);
-
-
-
   [HttpGet("{auctionId:guid}")]
-  public async Task<ActionResult<AdminAuctionResponse>> Get([FromRoute] Guid auctionId, CancellationToken ct)
+  public async Task<ActionResult<AdminAuctionDetailDto>> Get([FromRoute] Guid auctionId, CancellationToken ct)
   {
     var now = DateTimeOffset.UtcNow;
 
-    var a = await _db.Auctions
-      .AsNoTracking()
-      .SingleOrDefaultAsync(x => x.Id == auctionId, ct);
+    var row = await (
+      from auction in _db.Auctions.AsNoTracking()
+      join listing in _db.Listings.AsNoTracking() on auction.ListingId equals listing.Id
+      where auction.Id == auctionId
+      select new
+      {
+        auction.Id,
+        auction.ListingId,
+        ListingTitle = listing.Title,
+        auction.Status,
+        auction.StartingPriceCents,
+        auction.CurrentPriceCents,
+        auction.ReservePriceCents,
+        auction.ReserveMet,
+        auction.BidCount,
+        auction.StartTime,
+        auction.CloseTime,
+        auction.ClosingWindowEnd,
+        auction.QuotedShippingCents,
+        auction.RelistOfAuctionId,
+        auction.CreatedAt,
+        auction.UpdatedAt
+      })
+      .SingleOrDefaultAsync(ct);
 
-    if (a is null) return NotFound(new { error = "AUCTION_NOT_FOUND" });
+    if (row is null) return NotFound(new { error = "AUCTION_NOT_FOUND" });
 
-    var hasReserve = a.ReservePriceCents is not null;
-    bool? reserveMet = hasReserve ? a.ReserveMet : null;
+    var replacementAuctionId = await _db.Auctions.AsNoTracking()
+      .Where(x => x.RelistOfAuctionId == row.Id)
+      .OrderByDescending(x => x.CreatedAt)
+      .Select(x => (Guid?)x.Id)
+      .FirstOrDefaultAsync(ct);
 
+    var hasReserve = row.ReservePriceCents is not null;
+    bool? reserveMet = hasReserve ? row.ReserveMet : null;
 
-    // ----- Due helpers -----
-    var isCloseDue = a.Status == AuctionStatuses.Live && a.CloseTime <= now;
-    var secondsUntilCloseDue = (int)Math.Ceiling((a.CloseTime - now).TotalSeconds);
+    var isCloseDue = row.Status == AuctionStatuses.Live && row.CloseTime <= now;
+    var secondsUntilCloseDue = (int)Math.Ceiling((row.CloseTime - now).TotalSeconds);
     if (secondsUntilCloseDue < 0) secondsUntilCloseDue = 0;
 
     var isClosingWindowDue =
-      a.Status == AuctionStatuses.Closing &&
-      a.ClosingWindowEnd is not null &&
-      a.ClosingWindowEnd.Value <= now;
+      row.Status == AuctionStatuses.Closing &&
+      row.ClosingWindowEnd is not null &&
+      row.ClosingWindowEnd.Value <= now;
 
     int? secondsUntilClosingWindowDue = null;
-    if (a.ClosingWindowEnd is not null)
+    if (row.ClosingWindowEnd is not null)
     {
-      var s = (int)Math.Ceiling((a.ClosingWindowEnd.Value - now).TotalSeconds);
+      var s = (int)Math.Ceiling((row.ClosingWindowEnd.Value - now).TotalSeconds);
       secondsUntilClosingWindowDue = s < 0 ? 0 : s;
     }
 
-    // Relist rules must match AuctionStateMachineService:
-    // - status CLOSED_NOT_SOLD
-    // - reserve configured
-    // - reserve NOT met
-    // - not already relisted
-    // - UpdatedAt <= now - RelistDelay
     var relistDelay = TimeSpan.FromMinutes(10);
-    var relistDueAt = a.UpdatedAt.Add(relistDelay);
+    var relistDueAt = row.UpdatedAt.Add(relistDelay);
 
     var isRelistCandidate =
-      a.Status == AuctionStatuses.ClosedNotSold &&
-      a.RelistOfAuctionId is null &&
+      row.Status == AuctionStatuses.ClosedNotSold &&
+      row.RelistOfAuctionId is null &&
       hasReserve &&
-      a.ReserveMet == false;
-
+      row.ReserveMet == false;
 
     var isRelistDue = isRelistCandidate && relistDueAt <= now;
 
     var secondsUntilRelistDue = (int)Math.Ceiling((relistDueAt - now).TotalSeconds);
     if (secondsUntilRelistDue < 0) secondsUntilRelistDue = 0;
 
-    return Ok(new AdminAuctionResponse(
-      a.Id,
-      a.ListingId,
-      a.Status,
-      a.StartingPriceCents,
-      a.ReservePriceCents,
-
+    return Ok(new AdminAuctionDetailDto(
+      AuctionId: row.Id,
+      ListingId: row.ListingId,
+      ListingTitle: row.ListingTitle,
+      Status: row.Status,
+      StartingPriceCents: row.StartingPriceCents,
+      CurrentPriceCents: row.CurrentPriceCents,
+      ReservePriceCents: row.ReservePriceCents,
       HasReserve: hasReserve,
       ReserveMet: reserveMet,
-
-      a.BidCount,
-      a.StartTime,
-      a.CloseTime,
-      a.ClosingWindowEnd,
-      a.RelistOfAuctionId,
-      a.CreatedAt,
-      a.UpdatedAt,
-
+      BidCount: row.BidCount,
+      StartTime: row.StartTime,
+      CloseTime: row.CloseTime,
+      ClosingWindowEnd: row.ClosingWindowEnd,
+      QuotedShippingCents: row.QuotedShippingCents,
+      RelistOfAuctionId: row.RelistOfAuctionId,
+      ReplacementAuctionId: replacementAuctionId,
+      CreatedAt: row.CreatedAt,
+      UpdatedAt: row.UpdatedAt,
       ServerTimeUtc: now,
-
       IsCloseDue: isCloseDue,
       SecondsUntilCloseDue: secondsUntilCloseDue,
-
       IsClosingWindowDue: isClosingWindowDue,
       SecondsUntilClosingWindowDue: secondsUntilClosingWindowDue,
-
       IsRelistDue: isRelistDue,
       SecondsUntilRelistDue: secondsUntilRelistDue
     ));
-
   }
 
-
   [HttpGet("relist-of/{oldAuctionId:guid}")]
-  public async Task<ActionResult<AdminAuctionResponse>> GetRelist([FromRoute] Guid oldAuctionId, CancellationToken ct)
+  public async Task<ActionResult<AdminAuctionDetailDto>> GetRelist([FromRoute] Guid oldAuctionId, CancellationToken ct)
   {
     var now = DateTimeOffset.UtcNow;
 
-    var relisted = await _db.Auctions.AsNoTracking()
-      .Where(x => x.RelistOfAuctionId == oldAuctionId)
-      .OrderByDescending(x => x.CreatedAt)
+    var row = await (
+      from auction in _db.Auctions.AsNoTracking()
+      join listing in _db.Listings.AsNoTracking() on auction.ListingId equals listing.Id
+      where auction.RelistOfAuctionId == oldAuctionId
+      orderby auction.CreatedAt descending
+      select new
+      {
+        auction.Id,
+        auction.ListingId,
+        ListingTitle = listing.Title,
+        auction.Status,
+        auction.StartingPriceCents,
+        auction.CurrentPriceCents,
+        auction.ReservePriceCents,
+        auction.ReserveMet,
+        auction.BidCount,
+        auction.StartTime,
+        auction.CloseTime,
+        auction.ClosingWindowEnd,
+        auction.QuotedShippingCents,
+        auction.RelistOfAuctionId,
+        auction.CreatedAt,
+        auction.UpdatedAt
+      })
       .FirstOrDefaultAsync(ct);
 
-    if (relisted is null) return NotFound(new { error = "RELIST_NOT_FOUND" });
+    if (row is null) return NotFound(new { error = "RELIST_NOT_FOUND" });
 
-    var hasReserve = relisted.ReservePriceCents is not null;
-    bool? reserveMet = hasReserve ? relisted.ReserveMet : null;
+    var replacementAuctionId = await _db.Auctions.AsNoTracking()
+      .Where(x => x.RelistOfAuctionId == row.Id)
+      .OrderByDescending(x => x.CreatedAt)
+      .Select(x => (Guid?)x.Id)
+      .FirstOrDefaultAsync(ct);
 
-    // ----- Due helpers -----
-    var isCloseDue = relisted.Status == AuctionStatuses.Live && relisted.CloseTime <= now;
-    var secondsUntilCloseDue = (int)Math.Ceiling((relisted.CloseTime - now).TotalSeconds);
+    var hasReserve = row.ReservePriceCents is not null;
+    bool? reserveMet = hasReserve ? row.ReserveMet : null;
+
+    var isCloseDue = row.Status == AuctionStatuses.Live && row.CloseTime <= now;
+    var secondsUntilCloseDue = (int)Math.Ceiling((row.CloseTime - now).TotalSeconds);
     if (secondsUntilCloseDue < 0) secondsUntilCloseDue = 0;
 
     var isClosingWindowDue =
-      relisted.Status == AuctionStatuses.Closing &&
-      relisted.ClosingWindowEnd is not null &&
-      relisted.ClosingWindowEnd.Value <= now;
+      row.Status == AuctionStatuses.Closing &&
+      row.ClosingWindowEnd is not null &&
+      row.ClosingWindowEnd.Value <= now;
 
     int? secondsUntilClosingWindowDue = null;
-    if (relisted.ClosingWindowEnd is not null)
+    if (row.ClosingWindowEnd is not null)
     {
-      var s = (int)Math.Ceiling((relisted.ClosingWindowEnd.Value - now).TotalSeconds);
+      var s = (int)Math.Ceiling((row.ClosingWindowEnd.Value - now).TotalSeconds);
       secondsUntilClosingWindowDue = s < 0 ? 0 : s;
     }
 
     var relistDelay = TimeSpan.FromMinutes(10);
-    var relistDueAt = relisted.UpdatedAt.Add(relistDelay);
+    var relistDueAt = row.UpdatedAt.Add(relistDelay);
 
     var isRelistCandidate =
-        relisted.Status == AuctionStatuses.ClosedNotSold &&
-        relisted.RelistOfAuctionId is null &&
-        hasReserve &&
-        relisted.ReserveMet == false;
+      row.Status == AuctionStatuses.ClosedNotSold &&
+      row.RelistOfAuctionId is null &&
+      hasReserve &&
+      row.ReserveMet == false;
 
     var isRelistDue = isRelistCandidate && relistDueAt <= now;
 
     var secondsUntilRelistDue = (int)Math.Ceiling((relistDueAt - now).TotalSeconds);
     if (secondsUntilRelistDue < 0) secondsUntilRelistDue = 0;
 
-    return Ok(new AdminAuctionResponse(
-    relisted.Id,
-    relisted.ListingId,
-    relisted.Status,
-    relisted.StartingPriceCents,
-    relisted.ReservePriceCents,
-
-    HasReserve: hasReserve,
-    ReserveMet: reserveMet,
-
-    relisted.BidCount,
-    relisted.StartTime,
-    relisted.CloseTime,
-    relisted.ClosingWindowEnd,
-    relisted.RelistOfAuctionId,
-    relisted.CreatedAt,
-    relisted.UpdatedAt,
-
-    ServerTimeUtc: now,
-
-    IsCloseDue: isCloseDue,
-    SecondsUntilCloseDue: secondsUntilCloseDue,
-
-    IsClosingWindowDue: isClosingWindowDue,
-    SecondsUntilClosingWindowDue: secondsUntilClosingWindowDue,
-
-    IsRelistDue: isRelistDue,
-    SecondsUntilRelistDue: secondsUntilRelistDue
-  ));
+    return Ok(new AdminAuctionDetailDto(
+      AuctionId: row.Id,
+      ListingId: row.ListingId,
+      ListingTitle: row.ListingTitle,
+      Status: row.Status,
+      StartingPriceCents: row.StartingPriceCents,
+      CurrentPriceCents: row.CurrentPriceCents,
+      ReservePriceCents: row.ReservePriceCents,
+      HasReserve: hasReserve,
+      ReserveMet: reserveMet,
+      BidCount: row.BidCount,
+      StartTime: row.StartTime,
+      CloseTime: row.CloseTime,
+      ClosingWindowEnd: row.ClosingWindowEnd,
+      QuotedShippingCents: row.QuotedShippingCents,
+      RelistOfAuctionId: row.RelistOfAuctionId,
+      ReplacementAuctionId: replacementAuctionId,
+      CreatedAt: row.CreatedAt,
+      UpdatedAt: row.UpdatedAt,
+      ServerTimeUtc: now,
+      IsCloseDue: isCloseDue,
+      SecondsUntilCloseDue: secondsUntilCloseDue,
+      IsClosingWindowDue: isClosingWindowDue,
+      SecondsUntilClosingWindowDue: secondsUntilClosingWindowDue,
+      IsRelistDue: isRelistDue,
+      SecondsUntilRelistDue: secondsUntilRelistDue
+    ));
   }
 }

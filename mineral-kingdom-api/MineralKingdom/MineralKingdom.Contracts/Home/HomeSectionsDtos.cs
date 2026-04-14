@@ -3,6 +3,7 @@ namespace MineralKingdom.Contracts.Home;
 public sealed record HomeSectionsDto(
   HomeSectionDto FeaturedListings,
   HomeSectionDto EndingSoonAuctions,
+  HomeSectionDto UpcomingAuctions,
   HomeSectionDto NewArrivals
 );
 
@@ -21,7 +22,10 @@ public sealed record HomeSectionItemDto(
   int? PriceCents,
   int? EffectivePriceCents,
   int? CurrentBidCents,
+  int? StartingPriceCents,
   DateTimeOffset? EndsAt,
+  DateTimeOffset? StartTime,
+  string? Status,
   string Href,
   string? DiscountType,
   int? DiscountCents,

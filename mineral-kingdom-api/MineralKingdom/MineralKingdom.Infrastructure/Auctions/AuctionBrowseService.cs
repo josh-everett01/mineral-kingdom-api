@@ -19,16 +19,19 @@ public sealed class AuctionBrowseService
     DateTimeOffset now,
     CancellationToken ct)
   {
-    var liveAuctions = _db.Auctions
+    var visibleAuctions = _db.Auctions
       .AsNoTracking()
-      .Where(a => a.Status == AuctionStatuses.Live || a.Status == AuctionStatuses.Closing);
+      .Where(a =>
+        a.Status == AuctionStatuses.Live ||
+        a.Status == AuctionStatuses.Closing ||
+        a.Status == AuctionStatuses.Scheduled);
 
     var publishedListings = _db.Listings
       .AsNoTracking()
       .Where(l => l.Status == ListingStatuses.Published);
 
     var auctionListingRows = await (
-      from auction in liveAuctions
+      from auction in visibleAuctions
       join listing in publishedListings on auction.ListingId equals listing.Id
       select new
       {
@@ -39,11 +42,14 @@ public sealed class AuctionBrowseService
         listing.SizeClass,
         listing.IsFluorescent,
         auction.CurrentPriceCents,
+        auction.StartingPriceCents,
         auction.BidCount,
+        auction.StartTime,
         ClosingTimeUtc = auction.ClosingWindowEnd ?? auction.CloseTime,
         auction.Status
       })
-      .OrderBy(x => x.ClosingTimeUtc)
+      .OrderBy(x => x.Status == AuctionStatuses.Scheduled ? 1 : 0)
+      .ThenBy(x => x.Status == AuctionStatuses.Scheduled ? x.StartTime : x.ClosingTimeUtc)
       .ThenBy(x => x.Title)
       .ToListAsync(ct);
 
@@ -77,27 +83,29 @@ public sealed class AuctionBrowseService
         var slug = BuildSlug(x.Title);
 
         return new AuctionBrowseItemDto(
-          x.AuctionId,
-          x.ListingId,
-          x.Title,
-          slug,
-          $"/auctions/{x.AuctionId}",
-          primaryImageByListing.GetValueOrDefault(x.ListingId),
-          x.LocalityDisplay,
-          x.SizeClass,
-          x.IsFluorescent,
-          x.CurrentPriceCents,
-          x.BidCount,
-          x.ClosingTimeUtc,
-          x.Status
+          Id: x.AuctionId,
+          ListingId: x.ListingId,
+          Title: x.Title,
+          Slug: slug,
+          Href: $"/auctions/{x.AuctionId}",
+          PrimaryImageUrl: primaryImageByListing.GetValueOrDefault(x.ListingId),
+          LocalityDisplay: x.LocalityDisplay,
+          SizeClass: x.SizeClass,
+          IsFluorescent: x.IsFluorescent,
+          CurrentPriceCents: x.CurrentPriceCents,
+          StartingPriceCents: x.StartingPriceCents,
+          BidCount: x.BidCount,
+          StartTimeUtc: x.StartTime,
+          ClosingTimeUtc: x.ClosingTimeUtc,
+          Status: x.Status
         );
       })
       .ToList();
 
     return new AuctionBrowseResponseDto(
-      items,
-      items.Count,
-      now
+      Items: items,
+      Total: items.Count,
+      ServerTimeUtc: now
     );
   }
 

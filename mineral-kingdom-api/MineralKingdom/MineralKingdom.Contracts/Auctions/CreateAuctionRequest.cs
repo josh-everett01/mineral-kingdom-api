@@ -5,5 +5,9 @@ public sealed record CreateAuctionRequest(
   int StartingPriceCents,
   int? ReservePriceCents,
   int? QuotedShippingCents,
-  DateTimeOffset CloseTime
+  string LaunchMode,
+  string TimingMode,
+  int? DurationHours,
+  DateTimeOffset? StartTime,
+  DateTimeOffset? CloseTime
 );

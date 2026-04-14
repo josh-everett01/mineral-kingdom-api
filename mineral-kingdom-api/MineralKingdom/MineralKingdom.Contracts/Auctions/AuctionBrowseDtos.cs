@@ -1,5 +1,11 @@
 namespace MineralKingdom.Contracts.Auctions;
 
+public sealed record AuctionBrowseResponseDto(
+  List<AuctionBrowseItemDto> Items,
+  int Total,
+  DateTimeOffset ServerTimeUtc
+);
+
 public sealed record AuctionBrowseItemDto(
   Guid Id,
   Guid ListingId,
@@ -11,13 +17,9 @@ public sealed record AuctionBrowseItemDto(
   string? SizeClass,
   bool IsFluorescent,
   int CurrentPriceCents,
+  int StartingPriceCents,
   int BidCount,
+  DateTimeOffset? StartTimeUtc,
   DateTimeOffset ClosingTimeUtc,
   string Status
-);
-
-public sealed record AuctionBrowseResponseDto(
-  IReadOnlyList<AuctionBrowseItemDto> Items,
-  int Total,
-  DateTimeOffset ServerTimeUtc
 );

@@ -64,6 +64,11 @@ public sealed class TestingE2ESeedController : ControllerBase
     var adminAuctionLiveMediaId = Guid.Parse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee2");
     const string adminAuctionLiveListingTitle = "Admin Auction Live Fixture";
 
+    var adminOrderId = Guid.Parse("f1111111-1111-1111-1111-111111111111");
+    const string adminOrderNumber = "MK-E2E-ADMIN-ORDER-1";
+    const string adminOrderEmail = "smoke_user1@example.com";
+    var adminOrderPaymentId = Guid.Parse("f1111111-1111-1111-1111-111111111112");
+
     await UpsertMineralAsync(
       fluoriteMineralId,
       "Smoke Fluorite E2E",
@@ -545,6 +550,46 @@ public sealed class TestingE2ESeedController : ControllerBase
       now,
       ct);
 
+    await UpsertOrderAsync(
+      new Order
+      {
+        Id = adminOrderId,
+        UserId = null,
+        GuestEmail = adminOrderEmail,
+        OrderNumber = adminOrderNumber,
+        SourceType = "STORE",
+        AuctionId = null,
+        CheckoutHoldId = null,
+        PaymentDueAt = null,
+        PaidAt = now.AddHours(-6),
+        Status = "READY_TO_FULFILL",
+        CurrencyCode = "USD",
+        SubtotalCents = 24900,
+        DiscountTotalCents = 0,
+        ShippingAmountCents = 0,
+        ShippingMode = "SHIP_NOW",
+        TotalCents = 24900,
+        CreatedAt = now.AddHours(-6),
+        UpdatedAt = now.AddHours(-6)
+      },
+      ct);
+
+    await UpsertOrderPaymentAsync(
+      new OrderPayment
+      {
+        Id = adminOrderPaymentId,
+        OrderId = adminOrderId,
+        Provider = "STRIPE",
+        Status = CheckoutPaymentStatuses.Succeeded,
+        AmountCents = 24900,
+        CurrencyCode = "USD",
+        ProviderCheckoutId = "cs_test_e2e_admin_order_1",
+        ProviderPaymentId = "pi_test_e2e_admin_order_1",
+        CreatedAt = now.AddHours(-6),
+        UpdatedAt = now.AddHours(-6)
+      },
+      ct);
+
     return Ok(new E2ESeedResponse(
       StoreListingId: storeListingId,
       StoreOfferId: storeOfferId,
@@ -559,7 +604,10 @@ public sealed class TestingE2ESeedController : ControllerBase
       AdminAuctionScheduledListingId: adminAuctionScheduledListingId,
       AdminAuctionScheduledListingTitle: adminAuctionScheduledListingTitle,
       AdminAuctionLiveListingId: adminAuctionLiveListingId,
-      AdminAuctionLiveListingTitle: adminAuctionLiveListingTitle
+      AdminAuctionLiveListingTitle: adminAuctionLiveListingTitle,
+      AdminOrderId: adminOrderId,
+      AdminOrderNumber: adminOrderNumber,
+      AdminOrderEmail: adminOrderEmail
     ));
   }
 
@@ -700,6 +748,58 @@ public sealed class TestingE2ESeedController : ControllerBase
     await _db.SaveChangesAsync(ct);
   }
 
+  private async Task UpsertOrderAsync(Order seed, CancellationToken ct)
+  {
+    var existing = await _db.Orders.SingleOrDefaultAsync(x => x.Id == seed.Id, ct);
+    if (existing is null)
+    {
+      _db.Orders.Add(seed);
+    }
+    else
+    {
+      existing.UserId = seed.UserId;
+      existing.GuestEmail = seed.GuestEmail;
+      existing.OrderNumber = seed.OrderNumber;
+      existing.SourceType = seed.SourceType;
+      existing.AuctionId = seed.AuctionId;
+      existing.CheckoutHoldId = seed.CheckoutHoldId;
+      existing.PaymentDueAt = seed.PaymentDueAt;
+      existing.PaidAt = seed.PaidAt;
+      existing.Status = seed.Status;
+      existing.CurrencyCode = seed.CurrencyCode;
+      existing.SubtotalCents = seed.SubtotalCents;
+      existing.DiscountTotalCents = seed.DiscountTotalCents;
+      existing.ShippingAmountCents = seed.ShippingAmountCents;
+      existing.ShippingMode = seed.ShippingMode;
+      existing.TotalCents = seed.TotalCents;
+      existing.UpdatedAt = seed.UpdatedAt;
+    }
+
+    await _db.SaveChangesAsync(ct);
+  }
+
+  private async Task UpsertOrderPaymentAsync(OrderPayment seed, CancellationToken ct)
+  {
+    var existing = await _db.OrderPayments.SingleOrDefaultAsync(x => x.Id == seed.Id, ct);
+    if (existing is null)
+    {
+      _db.OrderPayments.Add(seed);
+    }
+    else
+    {
+      existing.OrderId = seed.OrderId;
+      existing.Provider = seed.Provider;
+      existing.Status = seed.Status;
+      existing.AmountCents = seed.AmountCents;
+      existing.CurrencyCode = seed.CurrencyCode;
+      existing.ProviderCheckoutId = seed.ProviderCheckoutId;
+      existing.ProviderPaymentId = seed.ProviderPaymentId;
+      existing.UpdatedAt = seed.UpdatedAt;
+    }
+
+    await _db.SaveChangesAsync(ct);
+  }
+
   private async Task ResetCheckoutStateAsync(
     Guid listingId,
     DateTimeOffset now,
@@ -772,9 +872,9 @@ public sealed class TestingE2ESeedController : ControllerBase
   }
 
   private async Task ResetAdminAuctionCreationStateAsync(
-  Guid listingId,
-  DateTimeOffset now,
-  CancellationToken ct)
+    Guid listingId,
+    DateTimeOffset now,
+    CancellationToken ct)
   {
     var auctions = await _db.Auctions
       .Where(x =>
@@ -816,6 +916,9 @@ public sealed class TestingE2ESeedController : ControllerBase
     Guid AdminAuctionScheduledListingId,
     string AdminAuctionScheduledListingTitle,
     Guid AdminAuctionLiveListingId,
-    string AdminAuctionLiveListingTitle
+    string AdminAuctionLiveListingTitle,
+    Guid AdminOrderId,
+    string AdminOrderNumber,
+    string AdminOrderEmail
   );
 }

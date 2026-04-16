@@ -105,7 +105,6 @@ public sealed class EmailOutboxDedupeTests : IClassFixture<PostgresContainerFixt
     await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
 
     Guid userId;
-    Guid orderId;
     Guid groupId;
 
     await using (var scope = factory.Services.CreateAsyncScope())
@@ -130,26 +129,15 @@ public sealed class EmailOutboxDedupeTests : IClassFixture<PostgresContainerFixt
         Id = Guid.NewGuid(),
         UserId = userId,
         BoxStatus = "CLOSED",
+        ShipmentRequestStatus = "NONE",
         ClosedAt = now,
         Status = "PACKED",
+        PackedAt = now,
         CreatedAt = now,
         UpdatedAt = now
       };
 
       db.FulfillmentGroups.Add(group);
-
-      // Gate requires invoice paid when amount > 0; use zero paid to simplify
-      db.ShippingInvoices.Add(new ShippingInvoice
-      {
-        Id = Guid.NewGuid(),
-        FulfillmentGroupId = group.Id,
-        AmountCents = 0,
-        CurrencyCode = "USD",
-        Status = "PAID",
-        PaidAt = now,
-        CreatedAt = now,
-        UpdatedAt = now
-      });
 
       var order = new Order
       {
@@ -158,11 +146,13 @@ public sealed class EmailOutboxDedupeTests : IClassFixture<PostgresContainerFixt
         GuestEmail = null,
         OrderNumber = $"MK-DD-{Guid.NewGuid():N}"[..18],
         SourceType = "STORE",
+        ShippingMode = StoreShippingModes.ShipNow,
         Status = "READY_TO_FULFILL",
         PaidAt = now,
         CurrencyCode = "USD",
         SubtotalCents = 1000,
         DiscountTotalCents = 0,
+        ShippingAmountCents = 0,
         TotalCents = 1000,
         FulfillmentGroupId = group.Id,
         CreatedAt = now,
@@ -172,24 +162,28 @@ public sealed class EmailOutboxDedupeTests : IClassFixture<PostgresContainerFixt
       db.Orders.Add(order);
       await db.SaveChangesAsync();
 
-      orderId = order.Id;
       groupId = group.Id;
     }
 
     using var client = factory.CreateClient();
     AsOwner(client);
 
-    // Ship twice (second is idempotent)
-    var req = new AdminMarkShippedRequest { ShippingCarrier = "USPS", TrackingNumber = "DUPETEST" };
+    var req = new AdminMarkShippedRequest
+    {
+      ShippingCarrier = "USPS",
+      TrackingNumber = "DUPETEST"
+    };
 
-    (await client.PostAsJsonAsync($"/api/admin/orders/{orderId}/fulfillment/shipped", req)).StatusCode.Should().Be(HttpStatusCode.NoContent);
-    (await client.PostAsJsonAsync($"/api/admin/orders/{orderId}/fulfillment/shipped", req)).StatusCode.Should().Be(HttpStatusCode.NoContent);
+    (await client.PostAsJsonAsync($"/api/admin/fulfillment/groups/{groupId}/shipped", req))
+      .StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+    (await client.PostAsJsonAsync($"/api/admin/fulfillment/groups/{groupId}/shipped", req))
+      .StatusCode.Should().Be(HttpStatusCode.NoContent);
 
     await using (var scope2 = factory.Services.CreateAsyncScope())
     {
       var db = scope2.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
 
-      // Best assertion: dedupe key is the contract that prevents duplicates
       var rows = await db.EmailOutbox.AsNoTracking()
         .Where(x =>
           x.TemplateKey == "SHIPMENT_CONFIRMED" &&

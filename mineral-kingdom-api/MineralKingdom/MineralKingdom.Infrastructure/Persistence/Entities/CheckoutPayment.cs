@@ -1,3 +1,5 @@
+using MineralKingdom.Contracts.Store;
+
 namespace MineralKingdom.Infrastructure.Persistence.Entities;
 
 public sealed class CheckoutPayment
@@ -28,4 +30,5 @@ public sealed class CheckoutPayment
 
   public DateTimeOffset CreatedAt { get; set; }
   public DateTimeOffset UpdatedAt { get; set; }
+  public string ShippingMode { get; set; } = StoreShippingModes.ShipNow;
 }

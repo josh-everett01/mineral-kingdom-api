@@ -1,6 +1,7 @@
 ﻿using System.Net.NetworkInformation;
 using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Contracts.Auth;
+using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using MineralKingdom.Infrastructure.Persistence.Entities.Analytics;
 using MineralKingdom.Infrastructure.Persistence.Entities.Cms;
@@ -619,22 +620,37 @@ public class MineralKingdomDbContext : DbContext
 
             // Orders link (FK lives on Order)
             b.HasMany(x => x.Orders)
-            .WithOne(x => x.FulfillmentGroup)
-            .HasForeignKey(x => x.FulfillmentGroupId)
-            .OnDelete(DeleteBehavior.SetNull);
+                .WithOne(x => x.FulfillmentGroup)
+                .HasForeignKey(x => x.FulfillmentGroupId)
+                .OnDelete(DeleteBehavior.SetNull);
 
-            b.Property(x => x.BoxStatus).HasMaxLength(16).IsRequired().HasDefaultValue("CLOSED");
+            b.Property(x => x.BoxStatus)
+                .HasMaxLength(32)
+                .IsRequired()
+                .HasDefaultValue("CLOSED");
+
             b.Property(x => x.ClosedAt);
 
             b.HasIndex(x => x.BoxStatus);
-            // optional but useful for admin queues
             b.HasIndex(x => new { x.BoxStatus, x.UpdatedAt });
+
+            b.Property(x => x.ShipmentRequestStatus)
+                .HasMaxLength(32)
+                .IsRequired()
+                .HasDefaultValue(ShipmentRequestStatuses.None);
+
+            b.Property(x => x.ShipmentRequestedAt);
+            b.Property(x => x.ShipmentReviewedAt);
+            b.Property(x => x.ShipmentReviewedByUserId);
+
+            b.HasIndex(x => x.ShipmentRequestStatus);
+            b.HasIndex(x => new { x.ShipmentRequestStatus, x.UpdatedAt });
 
             // Shipping invoices
             b.HasMany(x => x.ShippingInvoices)
-            .WithOne(x => x.FulfillmentGroup)
-            .HasForeignKey(x => x.FulfillmentGroupId)
-            .OnDelete(DeleteBehavior.Cascade);
+                .WithOne(x => x.FulfillmentGroup)
+                .HasForeignKey(x => x.FulfillmentGroupId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<ShippingInvoice>(b =>
@@ -831,5 +847,13 @@ public class MineralKingdomDbContext : DbContext
                 entity.HasIndex(x => new { x.CartId, x.CreatedAt });
                 entity.HasIndex(x => new { x.CartId, x.DismissedAt });
             });
+
+        modelBuilder.Entity<CheckoutPayment>(entity =>
+        {
+            entity.Property(x => x.ShippingMode)
+            .IsRequired()
+            .HasMaxLength(20)
+            .HasDefaultValue(StoreShippingModes.ShipNow);
+        });
     }
 }

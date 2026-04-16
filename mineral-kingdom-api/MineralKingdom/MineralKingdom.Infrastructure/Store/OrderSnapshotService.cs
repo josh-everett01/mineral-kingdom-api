@@ -149,12 +149,21 @@ public sealed class OrderSnapshotService
     var ledgerEntriesByOrderId = await LoadLedgerEntriesByOrderIdAsync(orderIds, ct);
     var listingSnapshotsById = await LoadListingSnapshotsByIdAsync(listingIds, ct);
 
+    var fulfillmentGroupIds = order.FulfillmentGroupId.HasValue
+  ? new[] { order.FulfillmentGroupId.Value }
+  : Array.Empty<Guid>();
+
+    var fulfillmentByGroupId = await LoadFulfillmentSnapshotsByGroupIdAsync(fulfillmentGroupIds, ct);
+    var shippingInvoiceByGroupId = await LoadLatestShippingInvoiceByGroupIdAsync(fulfillmentGroupIds, ct);
+
     return BuildOrderDto(
       order,
       latestPaymentByOrderId,
       paymentsByOrderId,
       ledgerEntriesByOrderId,
-      listingSnapshotsById);
+      listingSnapshotsById,
+      fulfillmentByGroupId,
+      shippingInvoiceByGroupId);
   }
 
   public async Task<List<OrderDto>> ListForUserAsync(Guid userId, CancellationToken ct)
@@ -180,22 +189,35 @@ public sealed class OrderSnapshotService
     var ledgerEntriesByOrderId = await LoadLedgerEntriesByOrderIdAsync(orderIds, ct);
     var listingSnapshotsById = await LoadListingSnapshotsByIdAsync(listingIds, ct);
 
+    var fulfillmentGroupIds = orders
+  .Where(o => o.FulfillmentGroupId.HasValue)
+  .Select(o => o.FulfillmentGroupId!.Value)
+  .Distinct()
+  .ToList();
+
+    var fulfillmentByGroupId = await LoadFulfillmentSnapshotsByGroupIdAsync(fulfillmentGroupIds, ct);
+    var shippingInvoiceByGroupId = await LoadLatestShippingInvoiceByGroupIdAsync(fulfillmentGroupIds, ct);
+
     return orders
       .Select(order => BuildOrderDto(
         order,
         latestPaymentByOrderId,
         paymentsByOrderId,
         ledgerEntriesByOrderId,
-        listingSnapshotsById))
+        listingSnapshotsById,
+        fulfillmentByGroupId,
+        shippingInvoiceByGroupId))
       .ToList();
   }
 
   private OrderDto BuildOrderDto(
-    Order order,
-    IReadOnlyDictionary<Guid, PaymentSummary> latestPaymentByOrderId,
-    IReadOnlyDictionary<Guid, List<PaymentHistoryEntry>> paymentsByOrderId,
-    IReadOnlyDictionary<Guid, List<LedgerHistoryEntry>> ledgerEntriesByOrderId,
-    IReadOnlyDictionary<Guid, ListingSnapshot> listingSnapshotsById)
+  Order order,
+  IReadOnlyDictionary<Guid, PaymentSummary> latestPaymentByOrderId,
+  IReadOnlyDictionary<Guid, List<PaymentHistoryEntry>> paymentsByOrderId,
+  IReadOnlyDictionary<Guid, List<LedgerHistoryEntry>> ledgerEntriesByOrderId,
+  IReadOnlyDictionary<Guid, ListingSnapshot> listingSnapshotsById,
+  IReadOnlyDictionary<Guid, FulfillmentSnapshot> fulfillmentByGroupId,
+  IReadOnlyDictionary<Guid, ShippingInvoiceSnapshot> shippingInvoiceByGroupId)
   {
     latestPaymentByOrderId.TryGetValue(order.Id, out var latestPayment);
     paymentsByOrderId.TryGetValue(order.Id, out var paymentEntries);
@@ -234,6 +256,22 @@ public sealed class OrderSnapshotService
       })
       .ToList();
 
+    FulfillmentSnapshot? fulfillment = null;
+    ShippingInvoiceSnapshot? shippingInvoice = null;
+
+    var requiresShippingInvoice =
+      string.Equals(order.ShippingMode, StoreShippingModes.OpenBox, StringComparison.OrdinalIgnoreCase);
+
+    if (order.FulfillmentGroupId is Guid fulfillmentGroupId)
+    {
+      fulfillmentByGroupId.TryGetValue(fulfillmentGroupId, out fulfillment);
+
+      if (requiresShippingInvoice)
+      {
+        shippingInvoiceByGroupId.TryGetValue(fulfillmentGroupId, out shippingInvoice);
+      }
+    }
+
     return new OrderDto(
       order.Id,
       order.UserId,
@@ -244,6 +282,7 @@ public sealed class OrderSnapshotService
       order.UpdatedAt,
       order.PaymentDueAt,
       order.ShippingMode,
+      requiresShippingInvoice,
       order.ShippingAmountCents,
       order.SubtotalCents,
       order.DiscountTotalCents,
@@ -254,6 +293,16 @@ public sealed class OrderSnapshotService
       latestPayment?.Provider,
       order.PaidAt,
       order.FulfillmentGroupId,
+      fulfillment?.Status,
+      fulfillment?.BoxStatus,
+      fulfillment?.ShipmentRequestStatus,
+      fulfillment?.PackedAt,
+      fulfillment?.ShippedAt,
+      fulfillment?.DeliveredAt,
+      fulfillment?.ShippingCarrier,
+      fulfillment?.TrackingNumber,
+      shippingInvoice?.ShippingInvoiceId,
+      shippingInvoice?.Status,
       statusHistory,
       lines
     );
@@ -576,4 +625,67 @@ public sealed class OrderSnapshotService
     string? PrimaryImageUrl,
     string? MineralName,
     string? Locality);
+
+  private sealed record FulfillmentSnapshot(
+Guid FulfillmentGroupId,
+string Status,
+string BoxStatus,
+string ShipmentRequestStatus,
+DateTimeOffset? PackedAt,
+DateTimeOffset? ShippedAt,
+DateTimeOffset? DeliveredAt,
+string? ShippingCarrier,
+string? TrackingNumber
+);
+
+  private sealed record ShippingInvoiceSnapshot(
+    Guid FulfillmentGroupId,
+    Guid ShippingInvoiceId,
+    string Status
+  );
+
+  private async Task<Dictionary<Guid, FulfillmentSnapshot>> LoadFulfillmentSnapshotsByGroupIdAsync(
+    IReadOnlyCollection<Guid> fulfillmentGroupIds,
+    CancellationToken ct)
+  {
+    if (fulfillmentGroupIds.Count == 0) return new Dictionary<Guid, FulfillmentSnapshot>();
+
+    var rows = await _db.FulfillmentGroups.AsNoTracking()
+      .Where(g => fulfillmentGroupIds.Contains(g.Id))
+      .Select(g => new FulfillmentSnapshot(
+        g.Id,
+        g.Status,
+        g.BoxStatus,
+        g.ShipmentRequestStatus,
+        g.PackedAt,
+        g.ShippedAt,
+        g.DeliveredAt,
+        g.ShippingCarrier,
+        g.TrackingNumber
+      ))
+      .ToListAsync(ct);
+
+    return rows.ToDictionary(x => x.FulfillmentGroupId, x => x);
+  }
+
+  private async Task<Dictionary<Guid, ShippingInvoiceSnapshot>> LoadLatestShippingInvoiceByGroupIdAsync(
+    IReadOnlyCollection<Guid> fulfillmentGroupIds,
+    CancellationToken ct)
+  {
+    if (fulfillmentGroupIds.Count == 0) return new Dictionary<Guid, ShippingInvoiceSnapshot>();
+
+    var rows = await _db.ShippingInvoices.AsNoTracking()
+      .Where(i => fulfillmentGroupIds.Contains(i.FulfillmentGroupId))
+      .OrderByDescending(i => i.CreatedAt)
+      .Select(i => new ShippingInvoiceSnapshot(
+        i.FulfillmentGroupId,
+        i.Id,
+        i.Status
+      ))
+      .ToListAsync(ct);
+
+    return rows
+      .GroupBy(x => x.FulfillmentGroupId)
+      .ToDictionary(g => g.Key, g => g.First());
+  }
 }

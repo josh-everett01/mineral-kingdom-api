@@ -158,6 +158,7 @@ public class Program
         builder.Services.AddScoped<OpenBoxService>();
         builder.Services.Configure<ShippingOptions>(builder.Configuration.GetSection("MK_SHIPPING"));
         builder.Services.AddScoped<ShippingInvoiceService>();
+        builder.Services.AddScoped<AdminFulfillmentWorkflowService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Notifications.EmailOutboxService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Notifications.UserNotificationPreferencesService>();
         builder.Services.AddScoped<MineralKingdom.Infrastructure.Dashboard.DashboardService>();

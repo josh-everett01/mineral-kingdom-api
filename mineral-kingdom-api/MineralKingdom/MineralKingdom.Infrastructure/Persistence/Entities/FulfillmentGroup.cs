@@ -14,7 +14,6 @@ public sealed class FulfillmentGroup
   // Fulfillment lifecycle (Option A)
   // READY_TO_FULFILL | PACKED | SHIPPED | DELIVERED
   public string Status { get; set; } = "READY_TO_FULFILL";
-
   public DateTimeOffset? PackedAt { get; set; }
   public DateTimeOffset? ShippedAt { get; set; }
   public DateTimeOffset? DeliveredAt { get; set; }
@@ -23,13 +22,14 @@ public sealed class FulfillmentGroup
   // OPEN | CLOSED
   public string BoxStatus { get; set; } = "CLOSED";
   public DateTimeOffset? ClosedAt { get; set; }
-
   public string? ShippingCarrier { get; set; }
   public string? TrackingNumber { get; set; }
-
   public DateTimeOffset CreatedAt { get; set; }
   public DateTimeOffset UpdatedAt { get; set; }
-
   public List<Order> Orders { get; set; } = new();
   public List<ShippingInvoice> ShippingInvoices { get; set; } = new();
+  public string ShipmentRequestStatus { get; set; } = ShipmentRequestStatuses.None;
+  public DateTimeOffset? ShipmentRequestedAt { get; set; }
+  public DateTimeOffset? ShipmentReviewedAt { get; set; }
+  public Guid? ShipmentReviewedByUserId { get; set; }
 }

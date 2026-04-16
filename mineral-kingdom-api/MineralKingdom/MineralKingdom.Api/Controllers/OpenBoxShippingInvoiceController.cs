@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MineralKingdom.Api.Security;
 using MineralKingdom.Contracts.Orders;
+using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Payments;
 using MineralKingdom.Infrastructure.Persistence;
 
@@ -16,7 +17,9 @@ public sealed class OpenBoxShippingInvoiceController : ControllerBase
   private readonly MineralKingdomDbContext _db;
   private readonly ShippingInvoicePaymentService _payments;
 
-  public OpenBoxShippingInvoiceController(MineralKingdomDbContext db, ShippingInvoicePaymentService payments)
+  public OpenBoxShippingInvoiceController(
+    MineralKingdomDbContext db,
+    ShippingInvoicePaymentService payments)
   {
     _db = db;
     _payments = payments;
@@ -27,28 +30,32 @@ public sealed class OpenBoxShippingInvoiceController : ControllerBase
   {
     var userId = User.GetUserId();
 
-    // If the user currently has an OPEN box, there should not yet be an active
-    // shipping invoice for that box. Do not return a historical paid invoice
-    // from an earlier closed box.
-    var openGroup = await _db.FulfillmentGroups.AsNoTracking()
-      .OrderByDescending(g => g.UpdatedAt)
-      .FirstOrDefaultAsync(g => g.UserId == userId && g.BoxStatus == "OPEN", ct);
+    var currentGroup = await (
+      from g in _db.FulfillmentGroups.AsNoTracking()
+      where g.UserId == userId
+      where _db.Orders.Any(o =>
+        o.FulfillmentGroupId == g.Id &&
+        o.UserId == userId &&
+        o.ShippingMode == StoreShippingModes.OpenBox)
+      orderby
+        g.BoxStatus == "OPEN" ? 0 :
+        g.BoxStatus == "LOCKED_FOR_REVIEW" ? 1 :
+        g.BoxStatus == "CLOSED" ? 2 :
+        g.BoxStatus == "SHIPPED" ? 3 : 4,
+        g.UpdatedAt descending
+      select g
+    ).FirstOrDefaultAsync(ct);
 
-    if (openGroup is not null)
-      return NotFound(new { error = "NO_INVOICE_FOR_OPEN_BOX" });
-
-    // Otherwise, fall back to the most recent CLOSED box and its invoice.
-    var closedGroup = await _db.FulfillmentGroups.AsNoTracking()
-      .OrderByDescending(g => g.UpdatedAt)
-      .FirstOrDefaultAsync(g => g.UserId == userId && g.BoxStatus == "CLOSED", ct);
-
-    if (closedGroup is null) return NotFound(new { error = "NO_CLOSED_BOX" });
+    if (currentGroup is null)
+      return NotFound(new { error = "OPEN_BOX_NOT_FOUND" });
 
     var inv = await _db.ShippingInvoices.AsNoTracking()
+      .Where(i => i.FulfillmentGroupId == currentGroup.Id)
       .OrderByDescending(i => i.CreatedAt)
-      .FirstOrDefaultAsync(i => i.FulfillmentGroupId == closedGroup.Id, ct);
+      .FirstOrDefaultAsync(ct);
 
-    if (inv is null) return NotFound(new { error = "INVOICE_NOT_FOUND" });
+    if (inv is null)
+      return NotFound(new { error = "INVOICE_NOT_FOUND" });
 
     var (ok, err, detail) = await _payments.GetInvoiceDetailForUserAsync(userId, inv.Id, ct);
 
@@ -66,15 +73,28 @@ public sealed class OpenBoxShippingInvoiceController : ControllerBase
     var userId = User.GetUserId();
     var now = DateTimeOffset.UtcNow;
 
-    var group = await _db.FulfillmentGroups.AsNoTracking()
-      .OrderByDescending(g => g.UpdatedAt)
-      .FirstOrDefaultAsync(g => g.UserId == userId && g.BoxStatus == "CLOSED", ct);
+    var currentGroup = await (
+      from g in _db.FulfillmentGroups.AsNoTracking()
+      where g.UserId == userId
+      where _db.Orders.Any(o =>
+        o.FulfillmentGroupId == g.Id &&
+        o.UserId == userId &&
+        o.ShippingMode == StoreShippingModes.OpenBox)
+      orderby
+        g.BoxStatus == "OPEN" ? 0 :
+        g.BoxStatus == "LOCKED_FOR_REVIEW" ? 1 :
+        g.BoxStatus == "CLOSED" ? 2 :
+        g.BoxStatus == "SHIPPED" ? 3 : 4,
+        g.UpdatedAt descending
+      select g
+    ).FirstOrDefaultAsync(ct);
 
-    if (group is null) return BadRequest(new { error = "NO_CLOSED_BOX" });
+    if (currentGroup is null)
+      return BadRequest(new { error = "OPEN_BOX_NOT_FOUND" });
 
     var (ok, err, result) = await _payments.StartAsync(
       userId,
-      group.Id,
+      currentGroup.Id,
       req.Provider,
       req.SuccessUrl,
       req.CancelUrl,

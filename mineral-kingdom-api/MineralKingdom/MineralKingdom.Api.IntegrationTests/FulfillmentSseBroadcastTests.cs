@@ -4,6 +4,7 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using MineralKingdom.Api.Security;
 using MineralKingdom.Contracts.Auth;
+using MineralKingdom.Contracts.Store;
 using MineralKingdom.Infrastructure.Persistence;
 using MineralKingdom.Infrastructure.Persistence.Entities;
 using Xunit;
@@ -26,7 +27,6 @@ public sealed class FulfillmentSseBroadcastTests : IClassFixture<PostgresContain
     var adminUserId = Guid.NewGuid();
 
     Guid groupId;
-    Guid orderId;
 
     await using (var scope = factory.Services.CreateAsyncScope())
     {
@@ -38,6 +38,8 @@ public sealed class FulfillmentSseBroadcastTests : IClassFixture<PostgresContain
         UserId = memberUserId,
         Status = "READY_TO_FULFILL",
         BoxStatus = "CLOSED",
+        ShipmentRequestStatus = "NONE",
+        ClosedAt = now,
         CreatedAt = now,
         UpdatedAt = now
       };
@@ -47,8 +49,14 @@ public sealed class FulfillmentSseBroadcastTests : IClassFixture<PostgresContain
         Id = Guid.NewGuid(),
         UserId = memberUserId,
         OrderNumber = "ORDER-FULFILL-SSE-1",
+        SourceType = "STORE",
+        ShippingMode = StoreShippingModes.ShipNow,
         Status = "READY_TO_FULFILL",
+        PaidAt = now,
         TotalCents = 1111,
+        SubtotalCents = 1111,
+        DiscountTotalCents = 0,
+        ShippingAmountCents = 0,
         CurrencyCode = "USD",
         FulfillmentGroupId = group.Id,
         CreatedAt = now,
@@ -60,10 +68,8 @@ public sealed class FulfillmentSseBroadcastTests : IClassFixture<PostgresContain
       await db.SaveChangesAsync();
 
       groupId = group.Id;
-      orderId = order.Id;
     }
 
-    // Connect SSE as the member (owner)
     using var memberClient = factory.CreateClient();
     memberClient.DefaultRequestHeaders.Add(TestAuthDefaults.UserIdHeader, memberUserId.ToString());
     memberClient.DefaultRequestHeaders.Add(TestAuthDefaults.EmailVerifiedHeader, "true");
@@ -75,20 +81,17 @@ public sealed class FulfillmentSseBroadcastTests : IClassFixture<PostgresContain
 
     await using var stream = await sseRes.Content.ReadAsStreamAsync();
 
-    // Read initial snapshot chunk
     var buf = new byte[4096];
     _ = await stream.ReadAsync(buf);
 
-    // Trigger admin transition
     using var adminClient = factory.CreateClient();
     adminClient.DefaultRequestHeaders.Add(TestAuthDefaults.UserIdHeader, adminUserId.ToString());
     adminClient.DefaultRequestHeaders.Add(TestAuthDefaults.EmailVerifiedHeader, "true");
     adminClient.DefaultRequestHeaders.Add(TestAuthDefaults.RoleHeader, UserRoles.Owner);
 
-    var packedRes = await adminClient.PostAsync($"/api/admin/orders/{orderId}/fulfillment/packed", content: null);
+    var packedRes = await adminClient.PostAsync($"/api/admin/fulfillment/groups/{groupId}/packed", content: null);
     packedRes.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-    // Read until we see PACKED (or timeout)
     var sb = new StringBuilder();
     using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
 

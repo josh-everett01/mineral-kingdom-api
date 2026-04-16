@@ -27,7 +27,7 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
   }
 
   [Fact]
-  public async Task Closing_open_box_generates_shipping_invoice_using_tiers()
+  public async Task Closing_open_box_requests_shipment_without_generating_shipping_invoice()
   {
     await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
 
@@ -52,7 +52,6 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
 
       var now = DateTimeOffset.UtcNow;
 
-      // Two orders totaling 3000 cents => should hit fallback tier 0-4999 => 599
       var o1 = new Order
       {
         Id = Guid.NewGuid(),
@@ -95,33 +94,25 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
     using var client = factory.CreateClient();
     AsUser(client, userId, UserRoles.User);
 
-    // Create open box
     (await client.PostAsync("/api/me/open-box", null)).StatusCode.Should().Be(HttpStatusCode.OK);
-
-    // Add both orders
     (await client.PostAsync($"/api/me/open-box/orders/{order1Id}", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
     (await client.PostAsync($"/api/me/open-box/orders/{order2Id}", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
-
-    // Close box => should generate invoice
     (await client.PostAsync("/api/me/open-box/close", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-    // Assert invoice exists
     await using (var scope2 = factory.Services.CreateAsyncScope())
     {
       var db = scope2.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
 
       var box = await db.FulfillmentGroups.AsNoTracking()
-        .SingleAsync(g => g.UserId == userId && g.BoxStatus == "CLOSED");
+        .SingleAsync(g => g.UserId == userId && g.BoxStatus == "LOCKED_FOR_REVIEW");
+
+      box.ShipmentRequestStatus.Should().Be(ShipmentRequestStatuses.Requested);
 
       var inv = await db.ShippingInvoices.AsNoTracking()
         .Where(i => i.FulfillmentGroupId == box.Id)
-        .OrderByDescending(i => i.CreatedAt)
         .FirstOrDefaultAsync();
 
-      inv.Should().NotBeNull();
-      inv!.Status.Should().Be("UNPAID");
-      inv.CurrencyCode.Should().Be("USD");
-      inv.AmountCents.Should().Be(599);
+      inv.Should().BeNull();
     }
   }
 
@@ -132,11 +123,13 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
 
     Guid userId;
     Guid orderId;
+    Guid groupId;
 
     await using (var scope = factory.Services.CreateAsyncScope())
     {
       var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
       userId = Guid.NewGuid();
+      groupId = Guid.NewGuid();
 
       db.Users.Add(new User
       {
@@ -150,6 +143,21 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
 
       var now = DateTimeOffset.UtcNow;
 
+      db.FulfillmentGroups.Add(new FulfillmentGroup
+      {
+        Id = groupId,
+        UserId = userId,
+        GuestEmail = null,
+        BoxStatus = "LOCKED_FOR_REVIEW",
+        ShipmentRequestStatus = ShipmentRequestStatuses.Invoiced,
+        ShipmentRequestedAt = now,
+        ShipmentReviewedAt = now,
+        ClosedAt = now,
+        Status = "READY_TO_FULFILL",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
       var order = new Order
       {
         Id = Guid.NewGuid(),
@@ -162,30 +170,35 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
         SubtotalCents = 6000,
         DiscountTotalCents = 0,
         TotalCents = 6000,
+        FulfillmentGroupId = groupId,
+        ShippingMode = StoreShippingModes.OpenBox,
         CreatedAt = now,
         UpdatedAt = now
       };
 
       db.Orders.Add(order);
+      db.ShippingInvoices.Add(new ShippingInvoice
+      {
+        Id = Guid.NewGuid(),
+        FulfillmentGroupId = groupId,
+        AmountCents = 899,
+        CalculatedAmountCents = 899,
+        CurrencyCode = "USD",
+        Status = "UNPAID",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
       await db.SaveChangesAsync();
       orderId = order.Id;
     }
 
-    // Customer creates/assigns/closes box => invoice created UNPAID
-    using var client = factory.CreateClient();
-    AsUser(client, userId, UserRoles.User);
-
-    (await client.PostAsync("/api/me/open-box", null)).StatusCode.Should().Be(HttpStatusCode.OK);
-    (await client.PostAsync($"/api/me/open-box/orders/{orderId}", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
-    (await client.PostAsync("/api/me/open-box/close", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
-
-    // Admin packs then tries to ship => should be blocked SHIPPING_UNPAID
     using var admin = factory.CreateClient();
     AsUser(admin, Guid.NewGuid(), UserRoles.Owner);
 
-    (await admin.PostAsync($"/api/admin/orders/{orderId}/fulfillment/packed", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
+    (await admin.PostAsync($"/api/admin/fulfillment/groups/{groupId}/packed", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-    var ship = await admin.PostAsJsonAsync($"/api/admin/orders/{orderId}/fulfillment/shipped",
+    var ship = await admin.PostAsJsonAsync($"/api/admin/fulfillment/groups/{groupId}/shipped",
       new AdminMarkShippedRequest { ShippingCarrier = "USPS", TrackingNumber = "X" });
 
     ship.StatusCode.Should().Be(HttpStatusCode.BadRequest);
@@ -195,18 +208,19 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
   }
 
   [Fact]
-  public async Task Can_ship_when_shipping_invoice_paid_or_amount_is_zero()
+  public async Task Can_ship_when_shipping_invoice_paid()
   {
     await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
 
     Guid userId;
     Guid orderId;
-    Guid boxId;
+    Guid groupId;
 
     await using (var scope = factory.Services.CreateAsyncScope())
     {
       var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
       userId = Guid.NewGuid();
+      groupId = Guid.NewGuid();
 
       db.Users.Add(new User
       {
@@ -220,6 +234,21 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
 
       var now = DateTimeOffset.UtcNow;
 
+      db.FulfillmentGroups.Add(new FulfillmentGroup
+      {
+        Id = groupId,
+        UserId = userId,
+        GuestEmail = null,
+        BoxStatus = "LOCKED_FOR_REVIEW",
+        ShipmentRequestStatus = ShipmentRequestStatuses.Paid,
+        ShipmentRequestedAt = now,
+        ShipmentReviewedAt = now,
+        ClosedAt = now,
+        Status = "READY_TO_FULFILL",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
       var order = new Order
       {
         Id = Guid.NewGuid(),
@@ -232,47 +261,36 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
         SubtotalCents = 1000,
         DiscountTotalCents = 0,
         TotalCents = 1000,
+        FulfillmentGroupId = groupId,
+        ShippingMode = StoreShippingModes.OpenBox,
         CreatedAt = now,
         UpdatedAt = now
       };
 
       db.Orders.Add(order);
+      db.ShippingInvoices.Add(new ShippingInvoice
+      {
+        Id = Guid.NewGuid(),
+        FulfillmentGroupId = groupId,
+        AmountCents = 599,
+        CalculatedAmountCents = 599,
+        CurrencyCode = "USD",
+        Status = "PAID",
+        PaidAt = now,
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
       await db.SaveChangesAsync();
       orderId = order.Id;
-    }
-
-    using var client = factory.CreateClient();
-    AsUser(client, userId, UserRoles.User);
-
-    (await client.PostAsync("/api/me/open-box", null)).StatusCode.Should().Be(HttpStatusCode.OK);
-    (await client.PostAsync($"/api/me/open-box/orders/{orderId}", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
-    (await client.PostAsync("/api/me/open-box/close", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
-
-    // Locate invoice + mark paid directly (simulating verified webhook for DoD gating test)
-    await using (var scope2 = factory.Services.CreateAsyncScope())
-    {
-      var db = scope2.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
-
-      var box = await db.FulfillmentGroups.AsNoTracking()
-        .SingleAsync(g => g.UserId == userId && g.BoxStatus == "CLOSED");
-      boxId = box.Id;
-
-      var inv = await db.ShippingInvoices
-        .SingleAsync(i => i.FulfillmentGroupId == boxId);
-
-      inv.Status = "PAID";
-      inv.PaidAt = DateTimeOffset.UtcNow;
-      inv.UpdatedAt = DateTimeOffset.UtcNow;
-
-      await db.SaveChangesAsync();
     }
 
     using var admin = factory.CreateClient();
     AsUser(admin, Guid.NewGuid(), UserRoles.Owner);
 
-    (await admin.PostAsync($"/api/admin/orders/{orderId}/fulfillment/packed", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
+    (await admin.PostAsync($"/api/admin/fulfillment/groups/{groupId}/packed", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-    var ship = await admin.PostAsJsonAsync($"/api/admin/orders/{orderId}/fulfillment/shipped",
+    var ship = await admin.PostAsJsonAsync($"/api/admin/fulfillment/groups/{groupId}/shipped",
       new AdminMarkShippedRequest { ShippingCarrier = "USPS", TrackingNumber = "OK" });
 
     ship.StatusCode.Should().Be(HttpStatusCode.NoContent);
@@ -285,13 +303,14 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
 
     Guid userId;
     Guid orderId;
-    Guid boxId;
+    Guid groupId;
     Guid invoiceId;
 
     await using (var scope = factory.Services.CreateAsyncScope())
     {
       var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
       userId = Guid.NewGuid();
+      groupId = Guid.NewGuid();
 
       db.Users.Add(new User
       {
@@ -305,6 +324,21 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
 
       var now = DateTimeOffset.UtcNow;
 
+      db.FulfillmentGroups.Add(new FulfillmentGroup
+      {
+        Id = groupId,
+        UserId = userId,
+        GuestEmail = null,
+        BoxStatus = "LOCKED_FOR_REVIEW",
+        ShipmentRequestStatus = ShipmentRequestStatuses.Invoiced,
+        ShipmentRequestedAt = now,
+        ShipmentReviewedAt = now,
+        ClosedAt = now,
+        Status = "READY_TO_FULFILL",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
       var order = new Order
       {
         Id = Guid.NewGuid(),
@@ -317,40 +351,36 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
         SubtotalCents = 15000,
         DiscountTotalCents = 0,
         TotalCents = 15000,
+        FulfillmentGroupId = groupId,
+        ShippingMode = StoreShippingModes.OpenBox,
         CreatedAt = now,
         UpdatedAt = now
       };
 
+      invoiceId = Guid.NewGuid();
+
       db.Orders.Add(order);
+      db.ShippingInvoices.Add(new ShippingInvoice
+      {
+        Id = invoiceId,
+        FulfillmentGroupId = groupId,
+        AmountCents = 1999,
+        CalculatedAmountCents = 1999,
+        CurrencyCode = "USD",
+        Status = "UNPAID",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
       await db.SaveChangesAsync();
       orderId = order.Id;
-    }
-
-    using var client = factory.CreateClient();
-    AsUser(client, userId, UserRoles.User);
-
-    (await client.PostAsync("/api/me/open-box", null)).StatusCode.Should().Be(HttpStatusCode.OK);
-    (await client.PostAsync($"/api/me/open-box/orders/{orderId}", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
-    (await client.PostAsync("/api/me/open-box/close", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
-
-    // Find invoice and override it directly through service-like behavior (we’ll add admin endpoint later)
-    await using (var scope2 = factory.Services.CreateAsyncScope())
-    {
-      var db = scope2.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
-
-      var box = await db.FulfillmentGroups.AsNoTracking()
-        .SingleAsync(g => g.UserId == userId && g.BoxStatus == "CLOSED");
-      boxId = box.Id;
-
-      var inv = await db.ShippingInvoices.SingleAsync(i => i.FulfillmentGroupId == boxId);
-      invoiceId = inv.Id;
     }
 
     await using (var scope3 = factory.Services.CreateAsyncScope())
     {
       var svc = scope3.ServiceProvider.GetRequiredService<MineralKingdom.Infrastructure.Payments.ShippingInvoiceService>();
       var ok = await svc.AdminOverrideShippingAsync(
-        boxId,
+        groupId,
         amountCents: 0,
         reason: "free shipping",
         actorUserId: Guid.NewGuid(),
@@ -362,7 +392,6 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
       ok.Ok.Should().BeTrue();
     }
 
-    // Invoice should now be PAID
     await using (var scope4 = factory.Services.CreateAsyncScope())
     {
       var db = scope4.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
@@ -370,14 +399,17 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
       inv.Status.Should().Be("PAID");
       inv.IsOverride.Should().BeTrue();
       inv.OverrideReason.Should().Be("free shipping");
+
+      var group = await db.FulfillmentGroups.AsNoTracking().SingleAsync(g => g.Id == groupId);
+      group.ShipmentRequestStatus.Should().Be(ShipmentRequestStatuses.Paid);
     }
 
     using var admin = factory.CreateClient();
     AsUser(admin, Guid.NewGuid(), UserRoles.Owner);
 
-    (await admin.PostAsync($"/api/admin/orders/{orderId}/fulfillment/packed", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
+    (await admin.PostAsync($"/api/admin/fulfillment/groups/{groupId}/packed", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-    var ship = await admin.PostAsJsonAsync($"/api/admin/orders/{orderId}/fulfillment/shipped",
+    var ship = await admin.PostAsJsonAsync($"/api/admin/fulfillment/groups/{groupId}/shipped",
       new AdminMarkShippedRequest { ShippingCarrier = "USPS", TrackingNumber = "OK" });
 
     ship.StatusCode.Should().Be(HttpStatusCode.NoContent);
@@ -470,6 +502,7 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
         DiscountTotalCents = 0,
         TotalCents = 11000,
         FulfillmentGroupId = groupId,
+        ShippingMode = StoreShippingModes.OpenBox,
         CreatedAt = now,
         UpdatedAt = now
       });
@@ -584,6 +617,42 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
           UpdatedAt = now
         });
 
+      db.Orders.AddRange(
+new Order
+{
+  Id = Guid.NewGuid(),
+  UserId = userId,
+  OrderNumber = $"MK-SI-{Guid.NewGuid():N}"[..18],
+  SourceType = "STORE",
+  ShippingMode = StoreShippingModes.OpenBox,
+  Status = "READY_TO_FULFILL",
+  PaidAt = now.AddDays(-2),
+  CurrencyCode = "USD",
+  SubtotalCents = 1000,
+  DiscountTotalCents = 0,
+  TotalCents = 1000,
+  FulfillmentGroupId = closedGroupId,
+  CreatedAt = now.AddDays(-3),
+  UpdatedAt = now.AddDays(-2)
+},
+new Order
+{
+  Id = Guid.NewGuid(),
+  UserId = userId,
+  OrderNumber = $"MK-SI-{Guid.NewGuid():N}"[..18],
+  SourceType = "STORE",
+  ShippingMode = StoreShippingModes.OpenBox,
+  Status = "READY_TO_FULFILL",
+  PaidAt = now,
+  CurrencyCode = "USD",
+  SubtotalCents = 1200,
+  DiscountTotalCents = 0,
+  TotalCents = 1200,
+  FulfillmentGroupId = openGroupId,
+  CreatedAt = now.AddHours(-1),
+  UpdatedAt = now
+});
+
       db.ShippingInvoices.Add(new ShippingInvoice
       {
         Id = Guid.NewGuid(),
@@ -607,7 +676,7 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
     res.StatusCode.Should().Be(HttpStatusCode.NotFound);
 
     var body = await res.Content.ReadAsStringAsync();
-    body.Should().Contain("NO_INVOICE_FOR_OPEN_BOX");
+    body.Should().Contain("INVOICE_NOT_FOUND");
   }
 
   [Fact]
@@ -696,6 +765,7 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
         DiscountTotalCents = 0,
         TotalCents = 11000,
         FulfillmentGroupId = groupId,
+        ShippingMode = StoreShippingModes.OpenBox,
         CreatedAt = now,
         UpdatedAt = now
       });
@@ -822,5 +892,88 @@ public sealed class ShippingInvoiceTests : IClassFixture<PostgresContainerFixtur
 
     var body = await res.Content.ReadAsStringAsync();
     body.Should().Contain("INVOICE_NOT_FOUND");
+  }
+
+  [Fact]
+  public async Task Admin_can_create_shipping_invoice_for_requested_shipment()
+  {
+    await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
+
+    Guid userId;
+    Guid orderId;
+    Guid groupId;
+
+    await using (var scope = factory.Services.CreateAsyncScope())
+    {
+      var db = scope.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+      userId = Guid.NewGuid();
+      groupId = Guid.NewGuid();
+
+      db.Users.Add(new User
+      {
+        Id = userId,
+        Email = "ship_inv_admin_create@example.com",
+        EmailVerified = true,
+        Role = UserRoles.User,
+        CreatedAt = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
+        UpdatedAt = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
+      });
+
+      var now = DateTimeOffset.UtcNow;
+
+      db.FulfillmentGroups.Add(new FulfillmentGroup
+      {
+        Id = groupId,
+        UserId = userId,
+        GuestEmail = null,
+        BoxStatus = "LOCKED_FOR_REVIEW",
+        ShipmentRequestStatus = ShipmentRequestStatuses.Requested,
+        ShipmentRequestedAt = now,
+        ClosedAt = now,
+        Status = "READY_TO_FULFILL",
+        CreatedAt = now,
+        UpdatedAt = now
+      });
+
+      var order = new Order
+      {
+        Id = Guid.NewGuid(),
+        UserId = userId,
+        OrderNumber = $"MK-SI-{Guid.NewGuid():N}"[..18],
+        SourceType = "STORE",
+        Status = "READY_TO_FULFILL",
+        PaidAt = now,
+        CurrencyCode = "USD",
+        SubtotalCents = 3000,
+        DiscountTotalCents = 0,
+        TotalCents = 3000,
+        FulfillmentGroupId = groupId,
+        CreatedAt = now,
+        UpdatedAt = now
+      };
+
+      db.Orders.Add(order);
+      await db.SaveChangesAsync();
+
+      orderId = order.Id;
+    }
+
+    using var admin = factory.CreateClient();
+    AsUser(admin, Guid.NewGuid(), UserRoles.Owner);
+
+    var create = await admin.PostAsync($"/api/admin/fulfillment/groups/{groupId}/shipping-invoice", null);
+    create.StatusCode.Should().Be(HttpStatusCode.OK);
+
+    await using (var scope2 = factory.Services.CreateAsyncScope())
+    {
+      var db = scope2.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var group = await db.FulfillmentGroups.AsNoTracking().SingleAsync(g => g.Id == groupId);
+      group.ShipmentRequestStatus.Should().Be(ShipmentRequestStatuses.Invoiced);
+
+      var invoice = await db.ShippingInvoices.AsNoTracking().SingleAsync(i => i.FulfillmentGroupId == groupId);
+      invoice.Status.Should().Be("UNPAID");
+      invoice.AmountCents.Should().Be(599);
+    }
   }
 }

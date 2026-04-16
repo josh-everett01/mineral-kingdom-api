@@ -32,20 +32,21 @@ public sealed class ShippingInvoicePaymentService
   }
 
   public async Task<(bool Ok, string? Error, CreateShippingInvoicePaymentRedirectResult? Result)> StartAsync(
-  Guid userId,
-  Guid fulfillmentGroupId,
-  string provider,
-  string successUrl,
-  string cancelUrl,
-  DateTimeOffset now,
-  CancellationToken ct)
+    Guid userId,
+    Guid fulfillmentGroupId,
+    string provider,
+    string successUrl,
+    string cancelUrl,
+    DateTimeOffset now,
+    CancellationToken ct)
   {
     var group = await _db.FulfillmentGroups.SingleOrDefaultAsync(g => g.Id == fulfillmentGroupId, ct);
     if (group is null) return (false, "GROUP_NOT_FOUND", null);
     if (group.UserId != userId) return (false, "FORBIDDEN", null);
 
-    if (!string.Equals(group.BoxStatus, "CLOSED", StringComparison.OrdinalIgnoreCase))
-      return (false, "BOX_NOT_CLOSED", null);
+    if (!string.Equals(group.BoxStatus, "LOCKED_FOR_REVIEW", StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(group.BoxStatus, "CLOSED", StringComparison.OrdinalIgnoreCase))
+      return (false, "BOX_NOT_READY_FOR_PAYMENT", null);
 
     var (resolvedOk, resolvedErr, inv) =
       await _shippingInvoices.ResolveCurrentInvoiceForGroupAsync(fulfillmentGroupId, now, ct);
@@ -139,6 +140,12 @@ public sealed class ShippingInvoicePaymentService
       inv.PaidAt ??= now;
       inv.UpdatedAt = now;
 
+      if (!string.Equals(group.ShipmentRequestStatus, ShipmentRequestStatuses.Paid, StringComparison.OrdinalIgnoreCase))
+      {
+        group.ShipmentRequestStatus = ShipmentRequestStatuses.Paid;
+        group.UpdatedAt = now;
+      }
+
       if (!wasPaid)
       {
         try
@@ -197,9 +204,9 @@ public sealed class ShippingInvoicePaymentService
   }
 
   public async Task<(bool Ok, string? Error, ShippingInvoiceDetailDto? Detail)> GetInvoiceDetailForUserAsync(
-    Guid userId,
-    Guid invoiceId,
-    CancellationToken ct)
+  Guid userId,
+  Guid invoiceId,
+  CancellationToken ct)
   {
     var row = await (
       from inv in _db.ShippingInvoices.AsNoTracking()
@@ -224,8 +231,21 @@ public sealed class ShippingInvoicePaymentService
     if (row is null)
       return (false, "INVOICE_NOT_FOUND", null);
 
+    var requiresShippingInvoice = await _db.Orders.AsNoTracking()
+      .AnyAsync(o =>
+        o.UserId == userId &&
+        o.FulfillmentGroupId == row.FulfillmentGroupId &&
+        o.ShippingMode == StoreShippingModes.OpenBox,
+        ct);
+
+    if (!requiresShippingInvoice)
+      return (false, "INVOICE_NOT_FOUND", null);
+
     var orderRows = await _db.Orders.AsNoTracking()
-      .Where(o => o.UserId == userId && o.FulfillmentGroupId == row.FulfillmentGroupId)
+      .Where(o =>
+        o.UserId == userId &&
+        o.FulfillmentGroupId == row.FulfillmentGroupId &&
+        o.ShippingMode == StoreShippingModes.OpenBox)
       .OrderBy(o => o.CreatedAt)
       .Select(o => new
       {
@@ -366,6 +386,16 @@ public sealed class ShippingInvoicePaymentService
 
     if (group.UserId != userId)
       return (false, "FORBIDDEN", null);
+
+    var requiresShippingInvoice = await _db.Orders.AsNoTracking()
+      .AnyAsync(o =>
+        o.UserId == userId &&
+        o.FulfillmentGroupId == invoice.FulfillmentGroupId &&
+        o.ShippingMode == StoreShippingModes.OpenBox,
+        ct);
+
+    if (!requiresShippingInvoice)
+      return (false, "INVOICE_NOT_FOUND", null);
 
     if (string.Equals(invoice.Status, "PAID", StringComparison.OrdinalIgnoreCase))
       return (false, "INVOICE_ALREADY_PAID", null);

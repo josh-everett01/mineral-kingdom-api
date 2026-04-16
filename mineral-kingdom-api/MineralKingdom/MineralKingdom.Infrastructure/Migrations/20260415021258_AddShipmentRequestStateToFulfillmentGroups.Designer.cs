@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using MineralKingdom.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MineralKingdom.Infrastructure.Migrations
 {
     [DbContext(typeof(MineralKingdomDbContext))]
-    partial class MineralKingdomDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260415021258_AddShipmentRequestStateToFulfillmentGroups")]
+    partial class AddShipmentRequestStateToFulfillmentGroups
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -647,13 +650,6 @@ namespace MineralKingdom.Infrastructure.Migrations
                     b.Property<string>("ProviderPaymentId")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
-
-                    b.Property<string>("ShippingMode")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)")
-                        .HasDefaultValue("SHIP_NOW");
 
                     b.Property<string>("Status")
                         .IsRequired()

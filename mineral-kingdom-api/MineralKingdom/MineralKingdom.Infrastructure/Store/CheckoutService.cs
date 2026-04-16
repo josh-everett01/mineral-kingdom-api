@@ -7,6 +7,7 @@ using MineralKingdom.Infrastructure.Persistence.Entities;
 using Microsoft.Extensions.Options;
 using MineralKingdom.Infrastructure.Configuration;
 using MineralKingdom.Infrastructure.Store.Realtime;
+using MineralKingdom.Infrastructure.Orders;
 
 namespace MineralKingdom.Infrastructure.Store;
 
@@ -16,13 +17,15 @@ public sealed class CheckoutService
   private readonly CheckoutOptions _opts;
   private readonly CartService _cartService;
   private readonly ICartRealtimePublisher _cartRealtimePublisher;
+  private readonly OpenBoxService _openBoxService;
 
-  public CheckoutService(MineralKingdomDbContext db, IOptions<CheckoutOptions> opts, CartService cartService, ICartRealtimePublisher cartRealtimePublisher)
+  public CheckoutService(MineralKingdomDbContext db, IOptions<CheckoutOptions> opts, CartService cartService, ICartRealtimePublisher cartRealtimePublisher, OpenBoxService openBoxService)
   {
     _db = db;
     _opts = opts.Value;
     _cartService = cartService;
     _cartRealtimePublisher = cartRealtimePublisher;
+    _openBoxService = openBoxService;
   }
 
   public async Task<(bool Ok, string? Error, CheckoutHold? Hold)> GetActiveCheckoutAsync(
@@ -440,15 +443,24 @@ public sealed class CheckoutService
 
       if (existingOrder is null)
       {
-        var order = await BuildPaidOrderFromHoldAsync(hold, now, ct);
-
-        _db.Orders.Add(order);
-
         var checkoutPayment = await _db.CheckoutPayments
           .Where(p => p.HoldId == hold.Id)
           .OrderByDescending(p => p.CreatedAt)
           .ThenByDescending(p => p.Id)
           .FirstOrDefaultAsync(ct);
+
+        var effectiveShippingMode =
+          string.IsNullOrWhiteSpace(checkoutPayment?.ShippingMode)
+            ? StoreShippingModes.ShipNow
+            : checkoutPayment!.ShippingMode;
+
+        var order = await BuildPaidOrderFromHoldAsync(
+          hold,
+          effectiveShippingMode,
+          now,
+          ct);
+
+        _db.Orders.Add(order);
 
         if (checkoutPayment is not null)
         {
@@ -484,6 +496,47 @@ public sealed class CheckoutService
           DataJson = null,
           CreatedAt = now
         });
+
+        await _db.SaveChangesAsync(ct);
+
+        if (string.Equals(order.ShippingMode, StoreShippingModes.OpenBox, StringComparison.OrdinalIgnoreCase)
+            && order.UserId is Guid userId)
+        {
+          var (boxOk, boxErr, _) = await _openBoxService.GetOrCreateOpenBoxAsync(userId, now, ct);
+          if (!boxOk)
+            return (false, boxErr ?? "OPEN_BOX_CREATE_FAILED");
+
+          var (assignOk, assignErr) = await _openBoxService.AddOrderToOpenBoxAsync(userId, order.Id, now, ct);
+          if (!assignOk)
+            return (false, assignErr ?? "OPEN_BOX_ASSIGN_FAILED");
+        }
+        else if (string.Equals(order.ShippingMode, StoreShippingModes.ShipNow, StringComparison.OrdinalIgnoreCase))
+        {
+          var fulfillmentGroup = new FulfillmentGroup
+          {
+            Id = Guid.NewGuid(),
+            UserId = order.UserId,
+            BoxStatus = "CLOSED",
+            ShipmentRequestStatus = "NONE",
+            Status = "READY_TO_FULFILL",
+            CreatedAt = now,
+            UpdatedAt = now
+          };
+
+          _db.FulfillmentGroups.Add(fulfillmentGroup);
+
+          order.FulfillmentGroupId = fulfillmentGroup.Id;
+          order.UpdatedAt = now;
+
+          _db.OrderLedgerEntries.Add(new OrderLedgerEntry
+          {
+            Id = Guid.NewGuid(),
+            OrderId = order.Id,
+            EventType = "FULFILLMENT_GROUP_CREATED",
+            DataJson = $"{{\"fulfillmentGroupId\":\"{fulfillmentGroup.Id}\",\"mode\":\"SHIP_NOW\"}}",
+            CreatedAt = now
+          });
+        }
       }
 
       await _db.SaveChangesAsync(ct);
@@ -574,9 +627,10 @@ public sealed class CheckoutService
   }
 
   private async Task<Order> BuildPaidOrderFromHoldAsync(
-    CheckoutHold hold,
-    DateTimeOffset now,
-    CancellationToken ct)
+  CheckoutHold hold,
+  string shippingMode,
+  DateTimeOffset now,
+  CancellationToken ct)
   {
     var cart = await _db.Carts
       .Include(c => c.Lines)
@@ -601,6 +655,10 @@ public sealed class CheckoutService
       GuestEmail = hold.GuestEmail,
       OrderNumber = GenerateOrderNumber(now),
       CheckoutHoldId = hold.Id,
+      SourceType = "STORE",
+      ShippingMode = string.IsNullOrWhiteSpace(shippingMode)
+    ? StoreShippingModes.ShipNow
+    : shippingMode,
       Status = "READY_TO_FULFILL",
       PaidAt = now,
       CurrencyCode = "USD",

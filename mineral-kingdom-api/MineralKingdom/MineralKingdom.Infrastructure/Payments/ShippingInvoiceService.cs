@@ -36,8 +36,9 @@ public sealed class ShippingInvoiceService
     var group = await _db.FulfillmentGroups.SingleOrDefaultAsync(g => g.Id == groupId, ct);
     if (group is null) return (false, "GROUP_NOT_FOUND", null);
 
-    if (!string.Equals(group.BoxStatus, "CLOSED", StringComparison.OrdinalIgnoreCase))
-      return (false, "BOX_NOT_CLOSED", null);
+    if (!string.Equals(group.BoxStatus, "LOCKED_FOR_REVIEW", StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(group.BoxStatus, "CLOSED", StringComparison.OrdinalIgnoreCase))
+      return (false, "BOX_NOT_READY_FOR_INVOICE", null);
 
     var invoices = await _db.ShippingInvoices
       .Where(i => i.FulfillmentGroupId == groupId)
@@ -52,16 +53,9 @@ public sealed class ShippingInvoiceService
       .Where(i => string.Equals(i.Status, "UNPAID", StringComparison.OrdinalIgnoreCase))
       .ToList();
 
-    var voided = invoices
-      .Where(i => string.Equals(i.Status, "VOID", StringComparison.OrdinalIgnoreCase))
-      .ToList();
-
     if (paid.Count > 1)
       return (false, "MULTIPLE_PAID_SHIPPING_INVOICES", null);
 
-    // If payment has already been completed for this fulfillment group,
-    // that paid invoice is the canonical invoice. Any remaining unpaid
-    // invoices are stale and must not remain actionable.
     if (paid.Count == 1)
     {
       var canonicalPaid = paid[0];
@@ -84,15 +78,12 @@ public sealed class ShippingInvoiceService
       return (true, null, canonicalPaid);
     }
 
-    // If there are multiple unpaid invoices and no paid invoice,
-    // that is a real invariant violation. Do not guess by "latest."
     if (unpaid.Count > 1)
       return (false, "MULTIPLE_ACTIVE_SHIPPING_INVOICES", null);
 
     if (unpaid.Count == 1)
       return (true, null, unpaid[0]);
 
-    // No current invoice exists; create exactly one.
     var amount = await CalculateTierShippingCentsAsync(groupId, ct);
     var currency = string.IsNullOrWhiteSpace(_opts.CurrencyCode)
       ? "USD"
@@ -123,6 +114,14 @@ public sealed class ShippingInvoiceService
     };
 
     _db.ShippingInvoices.Add(inv);
+
+    if (amount <= 0 &&
+        !string.Equals(group.ShipmentRequestStatus, ShipmentRequestStatuses.Paid, StringComparison.OrdinalIgnoreCase))
+    {
+      group.ShipmentRequestStatus = ShipmentRequestStatuses.Paid;
+      group.UpdatedAt = now;
+    }
+
     await _db.SaveChangesAsync(ct);
 
     try
@@ -233,6 +232,8 @@ public sealed class ShippingInvoiceService
     {
       inv.Status = "PAID";
       inv.PaidAt = now;
+      group.ShipmentRequestStatus = ShipmentRequestStatuses.Paid;
+      group.UpdatedAt = now;
     }
 
     _db.AdminAuditLogs.Add(new AdminAuditLog
@@ -274,6 +275,9 @@ public sealed class ShippingInvoiceService
     var inv = await _db.ShippingInvoices.SingleOrDefaultAsync(i => i.Id == shippingInvoiceId, ct);
     if (inv is null) return (false, "INVOICE_NOT_FOUND");
 
+    var group = await _db.FulfillmentGroups.SingleOrDefaultAsync(g => g.Id == inv.FulfillmentGroupId, ct);
+    if (group is null) return (false, "GROUP_NOT_FOUND");
+
     if (string.Equals(inv.Status, "PAID", StringComparison.OrdinalIgnoreCase))
       return (true, null);
 
@@ -283,10 +287,11 @@ public sealed class ShippingInvoiceService
     inv.ProviderPaymentId = providerPaymentId;
     inv.UpdatedAt = now;
 
+    group.ShipmentRequestStatus = ShipmentRequestStatuses.Paid;
+    group.UpdatedAt = now;
+
     await _db.SaveChangesAsync(ct);
 
-    // Once one invoice is paid for a fulfillment group, any other unpaid invoices
-    // for that same group are stale and must be voided.
     var staleUnpaid = await _db.ShippingInvoices
       .Where(i =>
         i.FulfillmentGroupId == inv.FulfillmentGroupId &&
@@ -334,6 +339,9 @@ public sealed class ShippingInvoiceService
     var inv = await _db.ShippingInvoices.SingleOrDefaultAsync(x => x.Id == invoiceId, ct);
     if (inv is null) return (false, "INVOICE_NOT_FOUND");
 
+    var group = await _db.FulfillmentGroups.SingleOrDefaultAsync(g => g.Id == inv.FulfillmentGroupId, ct);
+    if (group is null) return (false, "GROUP_NOT_FOUND");
+
     if (string.Equals(inv.Status, "PAID", StringComparison.OrdinalIgnoreCase))
       return (false, "INVOICE_ALREADY_PAID");
 
@@ -349,6 +357,8 @@ public sealed class ShippingInvoiceService
     {
       inv.Status = "PAID";
       inv.PaidAt = now;
+      group.ShipmentRequestStatus = ShipmentRequestStatuses.Paid;
+      group.UpdatedAt = now;
     }
 
     _db.AdminAuditLogs.Add(new AdminAuditLog

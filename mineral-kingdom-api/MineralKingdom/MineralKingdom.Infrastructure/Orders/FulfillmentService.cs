@@ -12,14 +12,15 @@ namespace MineralKingdom.Infrastructure.Orders;
 public sealed class FulfillmentService
 {
   private readonly MineralKingdomDbContext _db;
-
   private readonly ShippingInvoiceService _shipping;
-
   private readonly EmailOutboxService _emails;
-
   private readonly IFulfillmentRealtimePublisher _realtime;
 
-  public FulfillmentService(MineralKingdomDbContext db, ShippingInvoiceService shipping, EmailOutboxService emails, IFulfillmentRealtimePublisher realtime)
+  public FulfillmentService(
+    MineralKingdomDbContext db,
+    ShippingInvoiceService shipping,
+    EmailOutboxService emails,
+    IFulfillmentRealtimePublisher realtime)
   {
     _db = db;
     _shipping = shipping;
@@ -28,31 +29,32 @@ public sealed class FulfillmentService
   }
 
   public async Task<(bool Ok, string? Error)> AdminMarkPackedAsync(
-    Guid orderId,
+    Guid groupId,
     Guid actorUserId,
     DateTimeOffset now,
     string? ipAddress,
     string? userAgent,
     CancellationToken ct)
   {
-    var order = await _db.Orders.SingleOrDefaultAsync(o => o.Id == orderId, ct);
-    if (order is null) return (false, "ORDER_NOT_FOUND");
+    var group = await _db.FulfillmentGroups.SingleOrDefaultAsync(g => g.Id == groupId, ct);
+    if (group is null) return (false, "GROUP_NOT_FOUND");
 
-    // Payment gating: must be paid/ready to fulfill
-    if (!string.Equals(order.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase) &&
-        !string.Equals(order.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase)) // temporary compatibility
+    var orders = await _db.Orders
+      .Where(o => o.FulfillmentGroupId == groupId)
+      .ToListAsync(ct);
+
+    if (orders.Count == 0) return (false, "GROUP_HAS_NO_ORDERS");
+
+    if (orders.Any(o => !string.Equals(o.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase)))
       return (false, "ORDER_NOT_READY_TO_FULFILL");
 
-    var group = await EnsureGroupForOrderAsync(order, now, ct);
-
-    // Idempotency
     if (string.Equals(group.Status, "PACKED", StringComparison.OrdinalIgnoreCase))
       return (true, null);
 
     if (!string.Equals(group.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase))
       return (false, "INVALID_FULFILLMENT_TRANSITION");
 
-    var before = Snapshot(group, order.Id);
+    var before = Snapshot(group);
 
     group.Status = "PACKED";
     group.PackedAt ??= now;
@@ -61,44 +63,45 @@ public sealed class FulfillmentService
     _db.AdminAuditLogs.Add(new AdminAuditLog
     {
       Id = Guid.NewGuid(),
-
       ActorUserId = actorUserId,
       ActorRole = UserRoles.Owner,
-
-      ActionType = "ORDER_FULFILLMENT_PACKED",
-
+      ActionType = "FULFILLMENT_GROUP_PACKED",
       EntityType = "FULFILLMENT_GROUP",
       EntityId = group.Id,
-
       BeforeJson = before,
-      AfterJson = Snapshot(group, order.Id),
-
+      AfterJson = Snapshot(group),
       IpAddress = ipAddress,
       UserAgent = userAgent,
-
       CreatedAt = now
     });
 
     await _db.SaveChangesAsync(ct);
-    try { await _realtime.PublishFulfillmentAsync(group.Id, now, ct); } catch { /* best-effort */ }
+
+    try { await _realtime.PublishFulfillmentAsync(group.Id, now, ct); } catch { }
+
     return (true, null);
   }
 
   public async Task<(bool Ok, string? Error)> AdminMarkShippedAsync(
-    Guid orderId,
-    string shippingCarrier,
-    string trackingNumber,
-    Guid actorUserId,
-    DateTimeOffset now,
-    string? ipAddress,
-    string? userAgent,
-    CancellationToken ct)
+  Guid groupId,
+  string shippingCarrier,
+  string trackingNumber,
+  Guid actorUserId,
+  DateTimeOffset now,
+  string? ipAddress,
+  string? userAgent,
+  CancellationToken ct)
   {
-    var order = await _db.Orders.SingleOrDefaultAsync(o => o.Id == orderId, ct);
-    if (order is null) return (false, "ORDER_NOT_FOUND");
+    var group = await _db.FulfillmentGroups.SingleOrDefaultAsync(g => g.Id == groupId, ct);
+    if (group is null) return (false, "GROUP_NOT_FOUND");
 
-    if (!string.Equals(order.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase) &&
-        !string.Equals(order.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase)) // temporary compatibility
+    var orders = await _db.Orders
+      .Where(o => o.FulfillmentGroupId == groupId)
+      .ToListAsync(ct);
+
+    if (orders.Count == 0) return (false, "GROUP_HAS_NO_ORDERS");
+
+    if (orders.Any(o => !string.Equals(o.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase)))
       return (false, "ORDER_NOT_READY_TO_FULFILL");
 
     if (string.IsNullOrWhiteSpace(shippingCarrier)) return (false, "CARRIER_REQUIRED");
@@ -106,28 +109,29 @@ public sealed class FulfillmentService
     if (shippingCarrier.Length > 64) return (false, "CARRIER_TOO_LONG");
     if (trackingNumber.Length > 128) return (false, "TRACKING_TOO_LONG");
 
-    var group = await EnsureGroupForOrderAsync(order, now, ct);
-
-    // Idempotency
     if (string.Equals(group.Status, "SHIPPED", StringComparison.OrdinalIgnoreCase))
       return (true, null);
 
-    // Box must be closed before shipping (combined shipping semantics)
-    if (!string.Equals(group.BoxStatus, "CLOSED", StringComparison.OrdinalIgnoreCase))
+    if (!string.Equals(group.BoxStatus, "CLOSED", StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(group.BoxStatus, "LOCKED_FOR_REVIEW", StringComparison.OrdinalIgnoreCase))
       return (false, "BOX_NOT_CLOSED");
 
-    // Ensure shipping invoice exists (idempotent)
-    var (invOk, invErr, inv) = await _shipping.EnsureInvoiceForGroupAsync(group.Id, now, ct);
-    if (!invOk || inv is null) return (false, invErr);
+    var requiresShippingInvoice = orders.Any(o =>
+      string.Equals(o.ShippingMode, "OPEN_BOX", StringComparison.OrdinalIgnoreCase));
 
-    // Gate shipping when required
-    if (inv.AmountCents > 0 && !string.Equals(inv.Status, "PAID", StringComparison.OrdinalIgnoreCase))
-      return (false, "SHIPPING_UNPAID");
+    if (requiresShippingInvoice)
+    {
+      var (invOk, invErr, inv) = await _shipping.EnsureInvoiceForGroupAsync(group.Id, now, ct);
+      if (!invOk || inv is null) return (false, invErr);
+
+      if (inv.AmountCents > 0 && !string.Equals(inv.Status, "PAID", StringComparison.OrdinalIgnoreCase))
+        return (false, "SHIPPING_UNPAID");
+    }
 
     if (!string.Equals(group.Status, "PACKED", StringComparison.OrdinalIgnoreCase))
       return (false, "ORDER_NOT_PACKED");
 
-    var before = Snapshot(group, order.Id);
+    var before = Snapshot(group);
 
     group.Status = "SHIPPED";
     group.ShippedAt ??= now;
@@ -138,29 +142,22 @@ public sealed class FulfillmentService
     _db.AdminAuditLogs.Add(new AdminAuditLog
     {
       Id = Guid.NewGuid(),
-
       ActorUserId = actorUserId,
       ActorRole = UserRoles.Owner,
-
-      ActionType = "ORDER_FULFILLMENT_SHIPPED",
-
+      ActionType = "FULFILLMENT_GROUP_SHIPPED",
       EntityType = "FULFILLMENT_GROUP",
       EntityId = group.Id,
-
       BeforeJson = before,
-      AfterJson = Snapshot(group, order.Id),
-
+      AfterJson = Snapshot(group),
       IpAddress = ipAddress,
       UserAgent = userAgent,
-
       CreatedAt = now
     });
 
     await _db.SaveChangesAsync(ct);
 
-    try { await _realtime.PublishFulfillmentAsync(group.Id, now, ct); } catch { /* best-effort */ }
+    try { await _realtime.PublishFulfillmentAsync(group.Id, now, ct); } catch { }
 
-    // Enqueue SHIPMENT_CONFIRMED (best-effort; dedupe prevents duplicates)
     try
     {
       if (group.UserId is Guid uid)
@@ -172,7 +169,9 @@ public sealed class FulfillmentService
 
         if (!string.IsNullOrWhiteSpace(toEmail))
         {
-          var payload = $"{{\"groupId\":\"{group.Id}\",\"carrier\":\"{group.ShippingCarrier}\",\"tracking\":\"{group.TrackingNumber}\"}}";
+          var payload =
+            $"{{\"groupId\":\"{group.Id}\",\"carrier\":\"{group.ShippingCarrier}\",\"tracking\":\"{group.TrackingNumber}\"}}";
+
           await _emails.EnqueueAsync(
             toEmail: toEmail,
             templateKey: EmailTemplateKeys.ShipmentConfirmed,
@@ -183,35 +182,35 @@ public sealed class FulfillmentService
         }
       }
     }
-    catch { /* best-effort */ }
+    catch
+    {
+      // best-effort
+    }
+
     return (true, null);
   }
 
   public async Task<(bool Ok, string? Error)> AdminMarkDeliveredAsync(
-    Guid orderId,
+    Guid groupId,
     Guid actorUserId,
     DateTimeOffset now,
     string? ipAddress,
     string? userAgent,
     CancellationToken ct)
   {
-    var order = await _db.Orders.SingleOrDefaultAsync(o => o.Id == orderId, ct);
-    if (order is null) return (false, "ORDER_NOT_FOUND");
+    var group = await _db.FulfillmentGroups.SingleOrDefaultAsync(g => g.Id == groupId, ct);
+    if (group is null) return (false, "GROUP_NOT_FOUND");
 
-    if (!string.Equals(order.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase) &&
-        !string.Equals(order.Status, "READY_TO_FULFILL", StringComparison.OrdinalIgnoreCase)) // temporary compatibility
-      return (false, "ORDER_NOT_READY_TO_FULFILL");
+    var ordersExist = await _db.Orders.AnyAsync(o => o.FulfillmentGroupId == groupId, ct);
+    if (!ordersExist) return (false, "GROUP_HAS_NO_ORDERS");
 
-    var group = await EnsureGroupForOrderAsync(order, now, ct);
-
-    // Idempotency
     if (string.Equals(group.Status, "DELIVERED", StringComparison.OrdinalIgnoreCase))
       return (true, null);
 
     if (!string.Equals(group.Status, "SHIPPED", StringComparison.OrdinalIgnoreCase))
       return (false, "ORDER_NOT_SHIPPED");
 
-    var before = Snapshot(group, order.Id);
+    var before = Snapshot(group);
 
     group.Status = "DELIVERED";
     group.DeliveredAt ??= now;
@@ -220,64 +219,32 @@ public sealed class FulfillmentService
     _db.AdminAuditLogs.Add(new AdminAuditLog
     {
       Id = Guid.NewGuid(),
-
       ActorUserId = actorUserId,
       ActorRole = UserRoles.Owner,
-
-      ActionType = "ORDER_FULFILLMENT_DELIVERED",
-
+      ActionType = "FULFILLMENT_GROUP_DELIVERED",
       EntityType = "FULFILLMENT_GROUP",
       EntityId = group.Id,
-
       BeforeJson = before,
-      AfterJson = Snapshot(group, order.Id),
-
+      AfterJson = Snapshot(group),
       IpAddress = ipAddress,
       UserAgent = userAgent,
-
       CreatedAt = now
     });
 
     await _db.SaveChangesAsync(ct);
-    try { await _realtime.PublishFulfillmentAsync(group.Id, now, ct); } catch { /* best-effort */ }
+
+    try { await _realtime.PublishFulfillmentAsync(group.Id, now, ct); } catch { }
+
     return (true, null);
   }
 
-  private async Task<FulfillmentGroup> EnsureGroupForOrderAsync(Order order, DateTimeOffset now, CancellationToken ct)
-  {
-    if (order.FulfillmentGroupId is Guid groupId)
-    {
-      var existing = await _db.FulfillmentGroups.SingleAsync(x => x.Id == groupId, ct);
-      return existing;
-    }
-
-    var group = new FulfillmentGroup
-    {
-      Id = Guid.NewGuid(),
-      UserId = order.UserId,
-      GuestEmail = order.GuestEmail,
-      Status = "READY_TO_FULFILL",
-      CreatedAt = now,
-      UpdatedAt = now
-    };
-
-    _db.FulfillmentGroups.Add(group);
-
-    order.FulfillmentGroupId = group.Id;
-    order.UpdatedAt = now;
-
-    await _db.SaveChangesAsync(ct);
-    try { await _realtime.PublishFulfillmentAsync(group.Id, now, ct); } catch { /* best-effort */ }
-    return group;
-  }
-
-  private static string Snapshot(FulfillmentGroup g, Guid orderId)
+  private static string Snapshot(FulfillmentGroup g)
   {
     var payload = new
     {
-      orderId,
       g.Id,
       g.Status,
+      g.BoxStatus,
       g.PackedAt,
       g.ShippedAt,
       g.DeliveredAt,

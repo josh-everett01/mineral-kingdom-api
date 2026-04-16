@@ -69,7 +69,7 @@ public sealed class OpenBoxTests : IClassFixture<PostgresContainerFixture>
   }
 
   [Fact]
-  public async Task Customer_can_add_ready_order_to_open_box_and_close_box_blocks_new_adds()
+  public async Task Customer_can_add_ready_order_to_open_box_and_request_shipment_blocks_new_adds()
   {
     await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
 
@@ -140,20 +140,26 @@ public sealed class OpenBoxTests : IClassFixture<PostgresContainerFixture>
     client.DefaultRequestHeaders.Add(TestAuthDefaults.EmailVerifiedHeader, "true");
     client.DefaultRequestHeaders.Add(TestAuthDefaults.RoleHeader, UserRoles.User);
 
-    // Create open box
     (await client.PostAsync("/api/me/open-box", null)).StatusCode.Should().Be(HttpStatusCode.OK);
-
-    // Add order1
     (await client.PostAsync($"/api/me/open-box/orders/{order1Id}", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-    // Close
     (await client.PostAsync("/api/me/open-box/close", null)).StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-    // Attempt to add order2 => should fail
     var add2 = await client.PostAsync($"/api/me/open-box/orders/{order2Id}", null);
     add2.StatusCode.Should().Be(HttpStatusCode.BadRequest);
 
-    // Admin can list open boxes: should not include this one (it's closed)
+    await using (var scope2 = factory.Services.CreateAsyncScope())
+    {
+      var db = scope2.ServiceProvider.GetRequiredService<MineralKingdomDbContext>();
+
+      var box = await db.FulfillmentGroups.AsNoTracking()
+        .SingleAsync(g => g.UserId == userId, CancellationToken.None);
+
+      box.BoxStatus.Should().Be("LOCKED_FOR_REVIEW");
+      box.ShipmentRequestStatus.Should().Be(ShipmentRequestStatuses.Requested);
+      box.ShipmentRequestedAt.Should().NotBeNull();
+    }
+
     using var adminClient = factory.CreateClient();
     AsUser(adminClient, role: UserRoles.Owner, emailVerified: true);
 
@@ -161,7 +167,7 @@ public sealed class OpenBoxTests : IClassFixture<PostgresContainerFixture>
     list.StatusCode.Should().Be(HttpStatusCode.OK);
 
     var body = await list.Content.ReadAsStringAsync();
-    body.Should().NotContain("OPEN"); // closed box should not show up in open-boxes list
+    body.Should().Contain("LOCKED_FOR_REVIEW");
   }
 
   [Fact]
@@ -227,7 +233,7 @@ public sealed class OpenBoxTests : IClassFixture<PostgresContainerFixture>
   }
 
   [Fact]
-  public async Task Admin_can_list_open_boxes_and_fetch_group_details_with_orders()
+  public async Task Admin_can_list_open_and_requested_boxes_and_fetch_group_details_with_orders()
   {
     await using var factory = new TestAppFactory(_pg.Host, _pg.Port, _pg.Database, _pg.Username, _pg.Password);
 
@@ -257,8 +263,11 @@ public sealed class OpenBoxTests : IClassFixture<PostgresContainerFixture>
         Id = Guid.NewGuid(),
         UserId = userId,
         GuestEmail = null,
-        BoxStatus = "OPEN",
+        BoxStatus = "LOCKED_FOR_REVIEW",
+        ShipmentRequestStatus = ShipmentRequestStatuses.Requested,
+        ShipmentRequestedAt = now,
         Status = "READY_TO_FULFILL",
+        ClosedAt = now,
         CreatedAt = now,
         UpdatedAt = now
       };
@@ -297,14 +306,15 @@ public sealed class OpenBoxTests : IClassFixture<PostgresContainerFixture>
 
     var listBody = await list.Content.ReadAsStringAsync();
     listBody.Should().Contain(boxId.ToString());
+    listBody.Should().Contain("REQUESTED");
 
     var detail = await admin.GetAsync($"/api/admin/fulfillment/groups/{boxId}");
     detail.StatusCode.Should().Be(HttpStatusCode.OK);
 
-    var dto = await detail.Content.ReadFromJsonAsync<OpenBoxDto>();
-    dto.Should().NotBeNull();
-    dto!.FulfillmentGroupId.Should().Be(boxId);
-    dto.BoxStatus.Should().Be("OPEN");
-    dto.Orders.Should().Contain(o => o.OrderId == orderId);
+    var body = await detail.Content.ReadAsStringAsync();
+    body.Should().Contain(boxId.ToString());
+    body.Should().Contain("LOCKED_FOR_REVIEW");
+    body.Should().Contain("REQUESTED");
+    body.Should().Contain(orderId.ToString());
   }
 }

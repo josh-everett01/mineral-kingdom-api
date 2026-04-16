@@ -15,11 +15,18 @@ public static class CheckoutPaymentStatuses
   public const string Failed = "FAILED";
 }
 
+public static class StoreShippingModes
+{
+  public const string ShipNow = "SHIP_NOW";
+  public const string OpenBox = "OPEN_BOX";
+}
+
 public sealed record StartPaymentRequest(
   Guid HoldId,
   string Provider,
   string SuccessUrl,
-  string CancelUrl
+  string CancelUrl,
+  string? ShippingMode = null
 );
 
 public sealed record StartPaymentResponse(

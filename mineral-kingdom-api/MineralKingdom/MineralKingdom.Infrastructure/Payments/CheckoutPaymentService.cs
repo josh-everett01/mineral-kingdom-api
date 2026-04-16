@@ -28,12 +28,13 @@ public sealed class CheckoutPaymentService
   }
 
   public async Task<(bool Ok, string? Error, CheckoutPayment? Payment, string? RedirectUrl)> StartAsync(
-    Guid holdId,
-    string provider,
-    string successUrl,
-    string cancelUrl,
-    DateTimeOffset now,
-    CancellationToken ct)
+  Guid holdId,
+  string provider,
+  string successUrl,
+  string cancelUrl,
+  string? shippingMode,
+  DateTimeOffset now,
+  CancellationToken ct)
   {
     var hold = await _db.CheckoutHolds.SingleOrDefaultAsync(h => h.Id == holdId, ct);
     if (hold is null) return (false, "HOLD_NOT_FOUND", null, null);
@@ -53,6 +54,8 @@ public sealed class CheckoutPaymentService
 
     if (cart.Lines.Count == 0)
       return (false, "CART_EMPTY", null, null);
+
+    var effectiveShippingMode = NormalizeStoreShippingMode(shippingMode, hold.UserId.HasValue);
 
     var offerIds = cart.Lines.Select(l => l.OfferId).ToList();
     var offers = await _db.StoreOffers
@@ -88,6 +91,7 @@ public sealed class CheckoutPaymentService
       Status = CheckoutPaymentStatuses.Created,
       AmountCents = checked((int)total),
       CurrencyCode = "USD",
+      ShippingMode = effectiveShippingMode,
       CreatedAt = now,
       UpdatedAt = now
     };
@@ -132,6 +136,18 @@ public sealed class CheckoutPaymentService
     await _checkoutPaymentRealtimePublisher.PublishPaymentAsync(payment.Id, now, ct);
 
     return (true, null, payment, redirect.RedirectUrl);
+  }
+
+  private static string NormalizeStoreShippingMode(string? shippingMode, bool hasAuthenticatedHold)
+  {
+    var normalized = (shippingMode ?? "").Trim().ToUpperInvariant();
+
+    if (!hasAuthenticatedHold)
+      return StoreShippingModes.ShipNow;
+
+    return normalized == StoreShippingModes.OpenBox
+      ? StoreShippingModes.OpenBox
+      : StoreShippingModes.ShipNow;
   }
 
   public async Task<(bool Ok, string? Error, CheckoutPayment? Payment)> CaptureAsync(

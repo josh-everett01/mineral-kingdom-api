@@ -18,7 +18,9 @@ public sealed class PaymentsController : ControllerBase
 
   [HttpPost("start")]
   [AllowAnonymous]
-  public async Task<ActionResult<StartPaymentResponse>> Start([FromBody] StartPaymentRequest req, CancellationToken ct)
+  public async Task<ActionResult<StartPaymentResponse>> Start(
+  [FromBody] StartPaymentRequest req,
+  CancellationToken ct)
   {
     var now = DateTimeOffset.UtcNow;
 
@@ -27,6 +29,7 @@ public sealed class PaymentsController : ControllerBase
       req.Provider,
       req.SuccessUrl,
       req.CancelUrl,
+      req.ShippingMode,
       now,
       ct);
 

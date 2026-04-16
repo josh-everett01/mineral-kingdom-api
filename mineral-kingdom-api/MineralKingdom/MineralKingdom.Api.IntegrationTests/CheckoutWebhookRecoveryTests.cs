@@ -377,10 +377,10 @@ public sealed class CheckoutWebhookRecoveryTests : IClassFixture<PostgresContain
   }
 
   private static async Task<Order> InvokeBuildPaidOrderFromHoldAsync(
-    CheckoutService checkoutService,
-    CheckoutHold hold,
-    DateTimeOffset now,
-    CancellationToken ct)
+  CheckoutService checkoutService,
+  CheckoutHold hold,
+  DateTimeOffset now,
+  CancellationToken ct)
   {
     var method = typeof(CheckoutService).GetMethod(
       "BuildPaidOrderFromHoldAsync",
@@ -388,7 +388,10 @@ public sealed class CheckoutWebhookRecoveryTests : IClassFixture<PostgresContain
 
     method.Should().NotBeNull("BuildPaidOrderFromHoldAsync should exist");
 
-    var task = (Task<Order>)method!.Invoke(checkoutService, new object[] { hold, now, ct })!;
+    var task = (Task<Order>)method!.Invoke(
+      checkoutService,
+      new object[] { hold, StoreShippingModes.ShipNow, now, ct })!;
+
     return await task;
   }
 }

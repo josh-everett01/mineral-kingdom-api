@@ -22,6 +22,30 @@ public sealed class OpenBoxController : ControllerBase
     _db = db;
   }
 
+  // Read current open-box / shipment-request group for user.
+  // Prefer an active OPEN box first; otherwise return the most recent
+  // LOCKED_FOR_REVIEW/CLOSED/SHIPPED group so the customer can see next steps.
+  [HttpGet]
+  public async Task<ActionResult<OpenBoxDto>> GetCurrent(CancellationToken ct)
+  {
+    var userId = User.GetUserId();
+
+    var group = await _db.FulfillmentGroups.AsNoTracking()
+      .Where(g => g.UserId == userId)
+      .OrderBy(g =>
+        g.BoxStatus == "OPEN" ? 0 :
+        g.BoxStatus == "LOCKED_FOR_REVIEW" ? 1 :
+        g.BoxStatus == "CLOSED" ? 2 :
+        g.BoxStatus == "SHIPPED" ? 3 : 4)
+      .ThenByDescending(g => g.UpdatedAt)
+      .FirstOrDefaultAsync(ct);
+
+    if (group is null)
+      return NotFound(new { error = "OPEN_BOX_NOT_FOUND" });
+
+    return Ok(await BuildDtoAsync(group.Id, ct));
+  }
+
   // Create or return current open box (idempotent)
   [HttpPost]
   public async Task<ActionResult<OpenBoxDto>> GetOrCreate(CancellationToken ct)
@@ -90,6 +114,7 @@ public sealed class OpenBoxController : ControllerBase
     return new OpenBoxDto(
       FulfillmentGroupId: box.Id,
       BoxStatus: box.BoxStatus,
+      ShipmentRequestStatus: box.ShipmentRequestStatus,
       FulfillmentStatus: box.Status,
       ClosedAt: box.ClosedAt,
       OrderCount: orders.Count,
